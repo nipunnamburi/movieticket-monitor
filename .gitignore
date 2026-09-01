@@ -1,0 +1,18 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Local database & logs
+monitors.db
+monitor.log
+state.json
+config.yaml
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/

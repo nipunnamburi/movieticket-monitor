@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.DS_Store
+monitors.db
+monitor.log
+state.json
+.git/
+.gitignore
+*.md
