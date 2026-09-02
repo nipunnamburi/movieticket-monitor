@@ -20,7 +20,7 @@ import os
 import sys
 from datetime import datetime, timezone
 
-import db_neon as db
+import db
 import notifier
 import scraper
 import state

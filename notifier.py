@@ -209,9 +209,11 @@ def _test() -> None:
         print("config.yaml not found"); return
     cfg = yaml.safe_load(cfg_path.read_text())
     email_cfg = cfg.get("email", {})
-    monitor   = (cfg.get("targets") or [{}])[0]
-    monitor["name"] = monitor.get("name", "Test Movie")
-    monitor["city"] = monitor.get("city", "Secunderabad")
+    monitor = {
+        "name": "Test Movie",
+        "city": "Hyderabad",
+        "url": "https://in.bookmyshow.com/",
+    }
 
     changes = [
         {"date": "Fri, 01 Sep", "theatre": "Miraj Cinemas Secunderabad", "showtime": "10:30 AM",

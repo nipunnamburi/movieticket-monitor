@@ -191,6 +191,36 @@ async def _get_date_tabs(page: Page) -> list[dict]:
     return tabs
 
 
+async def _parse_shows_from_text(page: Page) -> dict[str, dict[str, str]]:
+    """Text-based fallback parser for BookMyShow showtime pages."""
+    shows: dict[str, dict[str, str]] = {}
+    try:
+        body = await page.inner_text("body")
+        lines = [l.strip() for l in body.splitlines() if l.strip()]
+        current_venue = None
+        time_re = re.compile(r"^(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))$", re.IGNORECASE)
+        ignore = {
+            "non-cancellable", "cancellable", "available", "fast filling",
+            "sold out", "late night shows", "early morning shows",
+            "price range", "sort by", "special formats", "other filters",
+            "preferred time", "movies", "events", "plays", "sports"
+        }
+        for l in lines:
+            if time_re.match(l):
+                if current_venue:
+                    if current_venue not in shows:
+                        shows[current_venue] = {}
+                    m = re.match(r"^(\d{1,2}):(\d{2})\s*(AM|PM)$", l.upper())
+                    time_str = f"{int(m.group(1)):02d}:{m.group(2)} {m.group(3)}" if m else l.upper()
+                    shows[current_venue][time_str] = "available"
+            elif len(l) > 3 and (":" in l or any(k in l.lower() for k in ("pvr", "inox", "cinepolis", "cinemas", "multiplex", "mall"))):
+                if l.lower() not in ignore and not re.search(r"^\d{1,2}:\d{2}", l):
+                    current_venue = l
+    except Exception as exc:
+        logger.warning("Text parser fallback exception: %s", exc)
+    return shows
+
+
 # ── Show parsing for a single rendered date ───────────────────────────────────
 
 async def _parse_shows_on_page(page: Page) -> dict[str, dict[str, str]]:
@@ -201,61 +231,60 @@ async def _parse_shows_on_page(page: Page) -> dict[str, dict[str, str]]:
     shows: dict[str, dict[str, str]] = {}
 
     venue_els = await _try_selectors(page, _VENUE_SELECTORS)
-    if not venue_els:
-        return shows
+    if venue_els:
+        for venue_el in venue_els:
+            raw = (await venue_el.text_content()) or ""
+            name = raw.strip().splitlines()[0].strip()
+            if not name or len(name) > 120:
+                continue
 
-    for venue_el in venue_els:
-        raw = (await venue_el.text_content()) or ""
-        name = raw.strip().splitlines()[0].strip()
-        if not name or len(name) > 120:
-            continue
-
-        # Walk to a parent container that also holds showtimes
-        try:
-            parent_handle = await venue_el.evaluate_handle(
-                """el => {
-                    let p = el;
-                    for (let i = 0; i < 5; i++) {
-                        p = p.parentElement;
-                        if (!p) break;
-                        if (p.querySelectorAll('[class*="showtime"], [class*="show-time"], [class*="__time"], time').length > 0)
-                            return p;
-                    }
-                    return el.parentElement || el;
-                }"""
-            )
-            parent = parent_handle.as_element()
-        except Exception:
-            parent = venue_el
-
-        # Find showtime buttons within this container
-        st_els = []
-        for sel in _SHOWTIME_SELECTORS:
             try:
-                found = await (parent or venue_el).query_selector_all(sel)
-                st_els.extend(found)
-                if found:
-                    break
+                parent_handle = await venue_el.evaluate_handle(
+                    """el => {
+                        let p = el;
+                        for (let i = 0; i < 5; i++) {
+                            p = p.parentElement;
+                            if (!p) break;
+                            if (p.querySelectorAll('[class*="showtime"], [class*="show-time"], [class*="__time"], time').length > 0)
+                                return p;
+                        }
+                        return el.parentElement || el;
+                    }"""
+                )
+                parent = parent_handle.as_element()
             except Exception:
-                continue
+                parent = venue_el
 
-        times: dict[str, str] = {}
-        for st_el in st_els:
-            text = ((await st_el.text_content()) or "").strip()
-            if not _is_time(text):
-                continue
-            # Normalise: "6:30 PM" → "06:30 PM"
-            m = re.search(r"(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)", text)
-            if not m:
-                continue
-            time_str = m.group(1).upper().strip()
+            st_els = []
+            for sel in _SHOWTIME_SELECTORS:
+                try:
+                    found = await (parent or venue_el).query_selector_all(sel)
+                    st_els.extend(found)
+                    if found:
+                        break
+                except Exception:
+                    continue
 
-            class_attr = (await st_el.get_attribute("class")) or ""
-            status = _classify(class_attr)
-            times[time_str] = status
+            times: dict[str, str] = {}
+            for st_el in st_els:
+                text = ((await st_el.text_content()) or "").strip()
+                if not _is_time(text):
+                    continue
+                m = re.search(r"(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)", text)
+                if not m:
+                    continue
+                time_str = m.group(1).upper().strip()
+                class_attr = (await st_el.get_attribute("class")) or ""
+                status = _classify(class_attr)
+                times[time_str] = status
 
-        if times:
-            shows[name] = times
+            if times:
+                shows[name] = times
+
+    # Fallback to robust text-based parser if DOM selector query found no venues
+    if not shows:
+        logger.info("  DOM selector parser returned 0 shows — running text-based fallback parser...")
+        shows = await _parse_shows_from_text(page)
 
     return shows
 

@@ -1,158 +1,148 @@
+from __future__ import annotations
+
 """
-monitor.py — BookMyShow ticket availability monitor.
+monitor.py — CLI entry point for BookMyShow ticket availability monitor.
+
+Runs checks for active monitors stored in the database.
 
 Usage:
-    python3 monitor.py              # normal run (used by cron)
-    python3 monitor.py --dry-run    # scrape and print snapshot, don't save or email
-    python3 monitor.py --force-alert  # send alert even if nothing changed (for testing)
+    python3 monitor.py                    # check all active monitors
+    python3 monitor.py --monitor-id 1      # check specific monitor ID
+    python3 monitor.py --dry-run          # print results, don't save state or send email
+    python3 monitor.py --force-alert      # send alert even if no changes detected
 """
 
 import argparse
 import json
 import logging
 import sys
-from datetime import datetime
-from pathlib import Path
+from datetime import datetime, timezone
 
-import yaml
+import db
+import notifier
+import scraper
+import state
 
-from scraper import scrape
-from state import compute_diff, load_state, save_state
-from notifier import send_alert
-
-# ── Logging ──────────────────────────────────────────────────────────────────
+# ── Logging ───────────────────────────────────────────────────────────────────
 LOG_FORMAT = "%(asctime)s  %(levelname)-8s  %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
-
 
 def _setup_logging(verbose: bool = False) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(level=level, format=LOG_FORMAT, datefmt=DATE_FORMAT)
 
-
-# ── Config loading ────────────────────────────────────────────────────────────
-def _load_config() -> dict:
-    cfg_path = Path(__file__).parent / "config.yaml"
-    if not cfg_path.exists():
-        logging.critical("config.yaml not found at %s", cfg_path)
-        sys.exit(1)
-    with cfg_path.open(encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
-# ── Main loop ─────────────────────────────────────────────────────────────────
-def run(dry_run: bool = False, force_alert: bool = False, verbose: bool = False) -> None:
+def run(monitor_id: int | None = None, dry_run: bool = False, force_alert: bool = False, verbose: bool = False) -> None:
     _setup_logging(verbose)
-    cfg = _load_config()
+    db.init_db()
 
-    targets     = cfg.get("targets", [])
-    email_cfg   = cfg.get("email", {})
-    state_file  = str(Path(__file__).parent / cfg.get("state_file", "state.json"))
-    interval    = int(cfg.get("interval_minutes", 15))
+    if monitor_id:
+        m = db.get_monitor(monitor_id)
+        if not m:
+            logging.error("Monitor #%d not found", monitor_id)
+            sys.exit(1)
+        monitors = [m]
+    else:
+        monitors = db.get_monitors(active_only=True)
 
-    if not targets:
-        logging.warning("No targets defined in config.yaml — nothing to do.")
+    if not monitors:
+        logging.info("No active monitors to check.")
         return
 
-    # Load old state (keyed by target URL)
-    old_state = load_state(state_file)
-    new_state = dict(old_state)  # start from copy; update only processed targets
+    logging.info("=== BMS Monitor run at %s (%d monitor(s)) ===", datetime.now().isoformat(), len(monitors))
 
-    run_time = datetime.now().isoformat(timespec="seconds")
-    logging.info("=== BookMyShow Monitor run at %s ===", run_time)
+    for m in monitors:
+        mid = m["id"]
+        name = m.get("name", f"Monitor #{mid}")
+        logging.info("Checking #%d — %s ...", mid, name)
 
-    all_changes: dict[str, list] = {}
-
-    for target in targets:
-        url  = target["url"]
-        name = target.get("name", url)
-        logging.info("Checking: %s", name)
-
-        snapshot = scrape(target)
-
-        if snapshot.get("error"):
-            logging.error("Scraper error for %s: %s", name, snapshot["error"])
-            # Don't overwrite state on error — keep last good state
+        res = scraper.scrape(m)
+        if res.get("error"):
+            logging.error("Scraper error for #%d: %s", mid, res["error"])
+            if not dry_run:
+                db.update_monitor(mid, {
+                    "last_checked": datetime.now(timezone.utc).isoformat(),
+                    "last_error": res["error"],
+                    "status": "error",
+                })
             continue
 
-        current_shows = snapshot["shows"]
-        logging.info("  Theatres/shows found: %d", len(current_shows))
+        shows = res.get("shows") or {}
+        logging.info("  Found %d date bucket(s)", len(shows))
 
         if dry_run:
             print(f"\n── Snapshot for {name} ──")
-            print(json.dumps(current_shows, indent=2, ensure_ascii=False))
+            print(json.dumps(shows, indent=2, ensure_ascii=False))
             continue
 
-        # Diff against previous
-        previous_shows = old_state.get(url, {})
-        changes = compute_diff(previous_shows, current_shows)
+        flt = dict(
+            filter_theatres  = m.get("filter_theatres") or [],
+            filter_dates     = m.get("filter_dates") or [],
+            filter_time_from = m.get("filter_time_from") or "",
+            filter_time_to   = m.get("filter_time_to") or "",
+        )
 
-        if changes:
-            logging.info("  ✅ %d change(s) detected", len(changes))
-            for c in changes:
-                logging.info("     %s | %s — %s", c["theatre"], c["showtime"], c["change"])
-            all_changes[url] = changes
-        else:
-            logging.info("  — No changes since last run")
+        old_shows = m.get("snapshot") or {}
+        old_filtered = scraper.apply_filters(old_shows, **flt)
+        new_filtered = scraper.apply_filters(shows, **flt)
 
-        # Update state regardless of whether there were changes
-        new_state[url] = current_shows
+        changes = state.compute_diff(old_filtered, new_filtered)
+        logging.info("  Diff: %d change(s) detected", len(changes))
 
-    if dry_run:
-        logging.info("Dry-run complete — no state saved, no emails sent.")
-        return
+        db.update_monitor(mid, {
+            "snapshot": shows,
+            "last_checked": datetime.now(timezone.utc).isoformat(),
+            "last_error": "",
+            "status": "active",
+        })
 
-    # Persist updated state
-    save_state(state_file, new_state)
-
-    # Send email alerts
-    if not all_changes and not force_alert:
-        logging.info("Nothing changed — no email sent.")
-        return
-
-    if force_alert and not all_changes:
-        # Build a fake change for testing
-        logging.info("--force-alert: sending test email with no real changes")
-        for target in targets:
-            all_changes[target["url"]] = [{
+        if force_alert and not changes:
+            logging.info("--force-alert set: sending test alert with sample changes")
+            changes = [{
+                "date": "Today",
                 "theatre": "Test Theatre",
-                "showtime": "Test Run",
+                "showtime": "Force Alert Test",
                 "old_status": "—",
                 "new_status": "—",
-                "change": "ℹ️ Force-alert test (no real changes)",
+                "change": "ℹ️ Force alert test run",
             }]
 
-    for target in targets:
-        url = target["url"]
-        changes = all_changes.get(url)
-        if not changes:
-            continue
-        ok = send_alert(email_cfg, target, changes, interval)
-        if not ok:
-            logging.error("Failed to send alert for %s", target.get("name", url))
+        if changes:
+            email_cfg = {
+                "from": m.get("email_to") or "",
+                "to": m.get("email_to") or "",
+                "app_password": "",
+                "smtp_host": "smtp.gmail.com",
+                "smtp_port": 587,
+            }
+            # Load email config from app/env if available
+            env_from = db.os.environ.get("EMAIL_FROM") if hasattr(db, "os") else None
+            if env_from:
+                import os
+                email_cfg["from"] = os.environ.get("EMAIL_FROM", "")
+                email_cfg["app_password"] = os.environ.get("EMAIL_APP_PASSWORD", "")
+                email_cfg["smtp_host"] = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+                email_cfg["smtp_port"] = int(os.environ.get("SMTP_PORT", 587))
+            
+            if email_cfg.get("app_password") and email_cfg.get("from"):
+                email_cfg["to"] = m.get("email_to") or email_cfg["from"]
+                ok = notifier.send_alert(email_cfg, m, changes, m.get("interval_minutes", 15))
+                if ok:
+                    db.save_alert(mid, changes)
+                    logging.info("  ✅ Alert sent to %s", email_cfg["to"])
+                else:
+                    logging.warning("  ⚠ Alert failed to send — check email configuration")
+            else:
+                db.save_alert(mid, changes)
+                logging.info("  Saved alert log (email credentials not set in env)")
 
     logging.info("=== Run complete ===")
 
-
-# ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="BookMyShow ticket availability monitor"
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Scrape and print snapshot without saving state or sending email",
-    )
-    parser.add_argument(
-        "--force-alert",
-        action="store_true",
-        help="Send an alert email even if nothing changed (useful for testing email)",
-    )
-    parser.add_argument(
-        "--verbose", "-v",
-        action="store_true",
-        help="Enable debug logging",
-    )
+    parser = argparse.ArgumentParser(description="BookMyShow ticket availability monitor")
+    parser.add_argument("--monitor-id", type=int, help="Check a specific monitor ID")
+    parser.add_argument("--dry-run", action="store_true", help="Scrape and print snapshot without saving state or sending email")
+    parser.add_argument("--force-alert", action="store_true", help="Send alert even if no changes detected")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose debug logging")
     args = parser.parse_args()
-    run(dry_run=args.dry_run, force_alert=args.force_alert, verbose=args.verbose)
+
+    run(monitor_id=args.monitor_id, dry_run=args.dry_run, force_alert=args.force_alert, verbose=args.verbose)

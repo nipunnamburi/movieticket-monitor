@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 """
-app.py — Flask web application + APScheduler background monitor.
+app.py — Unified Flask Web Application for BookMyShow Monitor.
 
-Run:
-    python3 app.py
-Then open http://localhost:5055 in your browser.
+Supports both:
+  - Cloud / Serverless Deployment (Vercel, Railway, Render with Neon Postgres)
+  - Self-Hosted / Local Deployment (SQLite + APScheduler)
 """
 
 import json
@@ -13,18 +13,17 @@ import logging
 import os
 import re
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 
+import requests as http_req
 import yaml
-from flask import Flask, jsonify, request, send_from_directory
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.interval import IntervalTrigger
+from flask import Flask, jsonify, render_template, request, send_from_directory
 
 import db
 import notifier
-import scraper
-from state import compute_diff
+import state
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -35,48 +34,63 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ── Flask app ─────────────────────────────────────────────────────────────────
+# ── Flask App Setup ───────────────────────────────────────────────────────────
 
 BASE_DIR   = Path(__file__).parent
 STATIC_DIR = BASE_DIR / "static"
 TMPL_DIR   = BASE_DIR / "templates"
 
 app = Flask(__name__, static_folder=str(STATIC_DIR), template_folder=str(TMPL_DIR))
-scheduler  = BackgroundScheduler(daemon=True)
 
-# ── Config helpers ────────────────────────────────────────────────────────────
-
+# Background scheduler (only initialized when running in self-hosted persistent mode)
+_scheduler = None
 _CFG_PATH = BASE_DIR / "config.yaml"
 
-
 def _is_cloud_mode() -> bool:
-    """True when email credentials come from environment variables (cloud deployment)."""
-    return bool(os.environ.get("EMAIL_FROM") and os.environ.get("EMAIL_APP_PASSWORD"))
-
+    """True if email credentials or serverless env indicators are present."""
+    return bool(os.environ.get("VERCEL") or os.environ.get("EMAIL_FROM") or db.is_postgres())
 
 def _load_email_cfg() -> dict:
-    """Load email config. Env vars take priority over config.yaml (for cloud deployments)."""
-    if _is_cloud_mode():
+    env_from = os.environ.get("EMAIL_FROM", "")
+    env_pass = os.environ.get("EMAIL_APP_PASSWORD", "")
+    env_to   = os.environ.get("EMAIL_TO", "")
+    
+    if env_from and env_pass:
         return {
-            "from":         os.environ["EMAIL_FROM"],
-            "to":           os.environ.get("EMAIL_TO", os.environ["EMAIL_FROM"]),
-            "app_password": os.environ["EMAIL_APP_PASSWORD"],
+            "from":         env_from,
+            "to":           env_to or env_from,
+            "app_password": env_pass,
             "smtp_host":    os.environ.get("SMTP_HOST", "smtp.gmail.com"),
             "smtp_port":    int(os.environ.get("SMTP_PORT", 587)),
+            "configured":   True,
+            "cloud_managed": True,
         }
-    if not _CFG_PATH.exists():
-        return {}
-    try:
-        return yaml.safe_load(_CFG_PATH.read_text(encoding="utf-8")).get("email", {}) or {}
-    except Exception:
-        return {}
+        
+    if _CFG_PATH.exists():
+        try:
+            cfg = yaml.safe_load(_CFG_PATH.read_text(encoding="utf-8")).get("email", {}) or {}
+            if cfg.get("from") and cfg.get("app_password"):
+                return {
+                    "from":         cfg.get("from", ""),
+                    "to":           cfg.get("to") or cfg.get("from", ""),
+                    "app_password": cfg.get("app_password", ""),
+                    "smtp_host":    cfg.get("smtp_host", "smtp.gmail.com"),
+                    "smtp_port":    int(cfg.get("smtp_port", 587)),
+                    "configured":   True,
+                    "cloud_managed": False,
+                }
+        except Exception:
+            pass
 
+    return {
+        "from": "", "to": "", "app_password": "",
+        "smtp_host": "smtp.gmail.com", "smtp_port": 587,
+        "configured": False, "cloud_managed": _is_cloud_mode(),
+    }
 
 def _save_email_cfg(data: dict) -> None:
-    """Save email config to config.yaml (local only; on cloud, env vars are authoritative)."""
     if _is_cloud_mode():
-        # On cloud, we can't override env vars — just store in yaml as a fallback record
-        pass
+        return
     cfg: dict = {}
     if _CFG_PATH.exists():
         try:
@@ -90,287 +104,228 @@ def _save_email_cfg(data: dict) -> None:
             encoding="utf-8",
         )
     except OSError:
-        pass  # read-only filesystem on some cloud platforms — silently ignore
+        pass
 
-
-# ── URL cleaning ──────────────────────────────────────────────────────────────
+# ── URL Extraction & Parsing ─────────────────────────────────────────────────
 
 _BMS_RE = re.compile(
     r"https?://(?:www\.)?in\.bookmyshow\.com/[^\s\"'<>\)\]]+",
     re.IGNORECASE,
 )
 
-
 def _extract_bms_url(text: str) -> str | None:
-    text = text.strip()
-    m = _BMS_RE.search(text)
+    m = _BMS_RE.search(text.strip())
     if not m:
         return None
-    url = m.group(0).rstrip(".,;)")
-    return url
-
+    return m.group(0).rstrip(".,;)")
 
 def _parse_movie_info(url: str) -> tuple[str, str]:
-    """Extract (name, city) from a BMS URL."""
-    # /movies/<city>/<movie-slug>/CODE
     m = re.search(r"/movies/([^/?#]+)/([^/?#]+)/", url)
     if m:
         city = m.group(1).replace("-", " ").title()
         name = m.group(2).replace("-", " ").title()
         return name, city
 
-    # /buytickets/<movie-slug>/CODE
     m = re.search(r"/buytickets/([^/?#]+)/", url)
     if m:
-        name = m.group(1).replace("-", " ").title()
-        return name, ""
+        return m.group(1).replace("-", " ").title(), ""
 
-    # /events/<slug>/CODE
     m = re.search(r"/events/([^/?#]+)/", url)
     if m:
-        name = m.group(1).replace("-", " ").title()
-        return name, ""
+        return m.group(1).replace("-", " ").title(), ""
 
     return "", ""
 
+# ── Check Triggering (GitHub Actions or Local Thread) ──────────────────────────
 
-# ── Monitoring job ────────────────────────────────────────────────────────────
+def _trigger_github_check(monitor_id: int | None = None) -> bool:
+    token = os.environ.get("GITHUB_TOKEN", "")
+    repo  = os.environ.get("GITHUB_REPO", "")
+    if not token or not repo:
+        return False
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/monitor.yml/dispatches"
+    body = {"ref": "main", "inputs": {"monitor_id": str(monitor_id) if monitor_id else ""}}
+    try:
+        resp = http_req.post(
+            url, json=body,
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
+            timeout=10
+        )
+        return resp.status_code == 204
+    except Exception as exc:
+        logger.warning("Failed to trigger GitHub check: %s", exc)
+        return False
 
-def _run_check(monitor_id: int) -> None:
-    """Called by the scheduler (runs in background thread)."""
-    monitor = db.get_monitor(monitor_id)
-    if not monitor or monitor["status"] != "active":
-        logger.info("Monitor %d is not active — skipping", monitor_id)
+def _run_local_check(monitor_id: int) -> None:
+    import scraper
+    m = db.get_monitor(monitor_id)
+    if not m or m.get("status") != "active":
         return
-
-    logger.info("Checking monitor %d (%s) …", monitor_id, monitor["name"])
+    logger.info("Local check running for monitor #%d (%s)...", monitor_id, m.get("name"))
     now = datetime.now().isoformat(timespec="seconds")
-
-    target = {
-        "name": monitor["name"],
-        "url":  monitor["url"],
-        "city": monitor["city"],
-    }
-
-    result = scraper.scrape(target)
-
-    if result.get("error"):
-        logger.error("Scraper error for monitor %d: %s", monitor_id, result["error"])
-        db.update_monitor(monitor_id, {
-            "last_checked": now,
-            "last_error":   result["error"],
-        })
+    res = scraper.scrape(m)
+    if res.get("error"):
+        db.update_monitor(monitor_id, {"last_checked": now, "last_error": res["error"]})
         return
-
-    new_full_snapshot: dict = result["shows"]
-
-    # Apply user-defined filters to both old and new snapshot before diffing
+    shows = res.get("shows") or {}
     flt = dict(
-        filter_theatres  = monitor.get("filter_theatres") or [],
-        filter_dates     = monitor.get("filter_dates") or [],
-        filter_time_from = monitor.get("filter_time_from") or "",
-        filter_time_to   = monitor.get("filter_time_to") or "",
+        filter_theatres  = m.get("filter_theatres") or [],
+        filter_dates     = m.get("filter_dates") or [],
+        filter_time_from = m.get("filter_time_from") or "",
+        filter_time_to   = m.get("filter_time_to") or "",
     )
+    old_filtered = scraper.apply_filters(m.get("snapshot") or {}, **flt)
+    new_filtered = scraper.apply_filters(shows, **flt)
+    changes = state.compute_diff(old_filtered, new_filtered)
+    
+    db.update_monitor(monitor_id, {"last_checked": now, "last_error": "", "snapshot": shows})
+    
+    if changes:
+        cfg = _load_email_cfg()
+        if cfg.get("app_password") and cfg.get("from"):
+            cfg["to"] = m.get("email_to") or cfg.get("to")
+            if notifier.send_alert(cfg, m, changes, m.get("interval_minutes", 15)):
+                db.save_alert(monitor_id, changes)
+        else:
+            db.save_alert(monitor_id, changes)
 
-    old_filtered = scraper.apply_filters(monitor.get("snapshot") or {}, **flt)
-    new_filtered  = scraper.apply_filters(new_full_snapshot, **flt)
+# ── Helper for Theatre Autocomplete ───────────────────────────────────────────
 
-    changes = compute_diff(old_filtered, new_filtered)
+def _theatres_from_snapshot(snapshot: dict) -> list[str]:
+    theatres: set[str] = set()
+    if isinstance(snapshot, dict):
+        for date_data in snapshot.values():
+            if isinstance(date_data, dict):
+                for k in date_data:
+                    if k != "_page_hash":
+                        theatres.add(k)
+    return sorted(theatres)
 
-    db.update_monitor(monitor_id, {
-        "last_checked": now,
-        "last_error":   "",
-        "snapshot":     new_full_snapshot,
-    })
-
-    if not changes:
-        logger.info("Monitor %d — no changes", monitor_id)
-        return
-
-    logger.info("Monitor %d — %d change(s) detected", monitor_id, len(changes))
-
-    email_cfg = _load_email_cfg()
-    if not email_cfg.get("app_password") or not email_cfg.get("from"):
-        logger.warning("Email not configured — skipping notification for monitor %d", monitor_id)
-        db.save_alert(monitor_id, changes)   # still log the change
-        return
-
-    # Override destination with this monitor's email
-    email_cfg_copy = dict(email_cfg)
-    email_cfg_copy["to"] = monitor.get("email_to") or email_cfg.get("to", "")
-
-    ok = notifier.send_alert(email_cfg_copy, monitor, changes, monitor.get("interval_minutes", 15))
-    if ok:
-        db.save_alert(monitor_id, changes)
-
-
-def _schedule_monitor(monitor: dict) -> None:
-    job_id = f"mon_{monitor['id']}"
-    if scheduler.get_job(job_id):
-        scheduler.remove_job(job_id)
-    if monitor["status"] != "active":
-        return
-    interval = max(5, monitor.get("interval_minutes", 15))
-    scheduler.add_job(
-        _run_check,
-        trigger=IntervalTrigger(minutes=interval),
-        args=[monitor["id"]],
-        id=job_id,
-        replace_existing=True,
-        next_run_time=datetime.now(),  # run immediately on add
-    )
-    logger.info("Scheduled monitor %d every %d min", monitor["id"], interval)
-
-
-def _unschedule_monitor(monitor_id: int) -> None:
-    job_id = f"mon_{monitor_id}"
-    if scheduler.get_job(job_id):
-        scheduler.remove_job(job_id)
-
-
-# ── Routes — frontend ─────────────────────────────────────────────────────────
+# ── Routes — Frontend ─────────────────────────────────────────────────────────
 
 @app.route("/")
 def index():
-    return send_from_directory(str(TMPL_DIR), "index.html")
-
+    return render_template("index.html")
 
 @app.route("/static/<path:filename>")
 def static_files(filename):
     return send_from_directory(str(STATIC_DIR), filename)
 
-
-# ── Routes — URL cleaning ─────────────────────────────────────────────────────
+# ── Routes — API ──────────────────────────────────────────────────────────────
 
 @app.route("/api/clean-url", methods=["POST"])
 def api_clean_url():
     body = request.get_json(force=True, silent=True) or {}
-    text = body.get("text", "")
-    url  = _extract_bms_url(text)
+    url = _extract_bms_url(body.get("text", ""))
     if not url:
-        return jsonify(error="No BookMyShow URL found in the pasted text"), 400
+        return jsonify(error="No BookMyShow URL found"), 400
     name, city = _parse_movie_info(url)
     return jsonify(url=url, name=name, city=city)
-
-
-# ── Routes — monitors ─────────────────────────────────────────────────────────
 
 @app.route("/api/monitors", methods=["GET"])
 def api_list_monitors():
     monitors = db.get_monitors()
-    # Add next_run info
     for m in monitors:
-        job = scheduler.get_job(f"mon_{m['id']}")
-        m["next_run"] = job.next_run_time.isoformat() if job and job.next_run_time else None
+        if _scheduler and _scheduler.get_job(f"mon_{m['id']}"):
+            job = _scheduler.get_job(f"mon_{m['id']}")
+            m["next_run"] = job.next_run_time.isoformat() if job and job.next_run_time else None
+        else:
+            m["next_run"] = None
     return jsonify(monitors)
 
+@app.route("/api/monitors/<int:mid>", methods=["GET"])
+def api_get_monitor(mid: int):
+    m = db.get_monitor(mid)
+    if not m:
+        return jsonify(error="Not found"), 404
+    return jsonify(m)
 
 @app.route("/api/monitors", methods=["POST"])
 def api_create_monitor():
     body = request.get_json(force=True, silent=True) or {}
-
     url = body.get("url", "").strip()
     if not url:
         return jsonify(error="url is required"), 400
-
-    # Auto-clean if full share text was pasted
     cleaned = _extract_bms_url(url)
     if cleaned:
         url = cleaned
-
-    name, city = _parse_movie_info(url)
-    name = body.get("name", name) or name
-    city = body.get("city", city) or city
-
-    if not body.get("email_to", "").strip():
+    parsed_name, parsed_city = _parse_movie_info(url)
+    email_to = body.get("email_to", "").strip()
+    if not email_to:
         return jsonify(error="email_to is required"), 400
 
     monitor = db.create_monitor({
-        "name":             name,
+        "name":             body.get("name") or parsed_name or url,
         "url":              url,
-        "city":             city,
-        "email_to":         body["email_to"].strip(),
+        "city":             body.get("city") or parsed_city,
+        "email_to":         email_to,
         "filter_theatres":  body.get("filter_theatres") or [],
         "filter_dates":     body.get("filter_dates") or [],
         "filter_time_from": body.get("filter_time_from", ""),
         "filter_time_to":   body.get("filter_time_to", ""),
         "interval_minutes": int(body.get("interval_minutes", 15)),
     })
-    _schedule_monitor(monitor)
+    
+    # Trigger initial check (via GitHub Actions if configured, else background thread)
+    if not _trigger_github_check(monitor["id"]):
+        t = threading.Thread(target=_run_local_check, args=(monitor["id"],), daemon=True)
+        t.start()
+        
     return jsonify(monitor), 201
 
-
-@app.route("/api/monitors/<int:monitor_id>", methods=["GET"])
-def api_get_monitor(monitor_id: int):
-    m = db.get_monitor(monitor_id)
-    if not m:
+@app.route("/api/monitors/<int:mid>", methods=["PATCH"])
+def api_update_monitor(mid: int):
+    body = request.get_json(force=True, silent=True) or {}
+    updated = db.update_monitor(mid, body)
+    if not updated:
         return jsonify(error="Not found"), 404
-    return jsonify(m)
-
-
-@app.route("/api/monitors/<int:monitor_id>", methods=["PATCH"])
-def api_update_monitor(monitor_id: int):
-    m = db.get_monitor(monitor_id)
-    if not m:
-        return jsonify(error="Not found"), 404
-
-    body    = request.get_json(force=True, silent=True) or {}
-    updated = db.update_monitor(monitor_id, body)
-    _schedule_monitor(updated)
     return jsonify(updated)
 
+@app.route("/api/monitors/<int:mid>", methods=["DELETE"])
+def api_delete_monitor(mid: int):
+    ok = db.delete_monitor(mid)
+    return jsonify(ok=ok) if ok else (jsonify(error="Not found"), 404)
 
-@app.route("/api/monitors/<int:monitor_id>", methods=["DELETE"])
-def api_delete_monitor(monitor_id: int):
-    _unschedule_monitor(monitor_id)
-    db.delete_monitor(monitor_id)
-    return jsonify(ok=True)
-
-
-@app.route("/api/monitors/<int:monitor_id>/pause", methods=["POST"])
-def api_pause_monitor(monitor_id: int):
-    m = db.get_monitor(monitor_id)
-    if not m:
+@app.route("/api/monitors/<int:mid>/pause", methods=["POST"])
+def api_pause_monitor(mid: int):
+    updated = db.toggle_pause(mid)
+    if not updated:
         return jsonify(error="Not found"), 404
-    new_status = "active" if m["status"] == "paused" else "paused"
-    updated = db.update_monitor(monitor_id, {"status": new_status})
-    _schedule_monitor(updated)
     return jsonify(updated)
 
-
-@app.route("/api/monitors/<int:monitor_id>/check", methods=["POST"])
-def api_check_now(monitor_id: int):
-    m = db.get_monitor(monitor_id)
+@app.route("/api/monitors/<int:mid>/check", methods=["POST"])
+def api_check_now(mid: int):
+    m = db.get_monitor(mid)
     if not m:
         return jsonify(error="Not found"), 404
-    # Run in a background thread so the HTTP response returns immediately
-    import threading
-    t = threading.Thread(target=_run_check, args=(monitor_id,), daemon=True)
+    if _trigger_github_check(mid):
+        return jsonify(ok=True, message="Check triggered via GitHub Actions (~30s)")
+    t = threading.Thread(target=_run_local_check, args=(mid,), daemon=True)
     t.start()
-    return jsonify(ok=True, message="Check triggered — results will arrive shortly")
+    return jsonify(ok=True, message="Local check triggered — results will arrive shortly")
 
-
-@app.route("/api/monitors/<int:monitor_id>/alerts", methods=["GET"])
-def api_alerts(monitor_id: int):
+@app.route("/api/monitors/<int:mid>/alerts", methods=["GET"])
+def api_alerts(mid: int):
     limit = min(int(request.args.get("limit", 30)), 100)
-    return jsonify(db.get_alert_log(monitor_id, limit=limit))
+    return jsonify(db.get_alert_log(mid, limit=limit))
 
+@app.route("/api/monitors/<int:mid>/theatres", methods=["GET"])
+def api_monitor_theatres(mid: int):
+    m = db.get_monitor(mid)
+    if not m:
+        return jsonify([])
+    return jsonify(_theatres_from_snapshot(m.get("snapshot") or {}))
 
-# ── Routes — email config ─────────────────────────────────────────────────────
+@app.route("/api/theatres", methods=["GET"])
+def api_all_theatres():
+    all_theatres: set[str] = set()
+    for m in db.get_monitors():
+        all_theatres.update(_theatres_from_snapshot(m.get("snapshot") or {}))
+    return jsonify(sorted(all_theatres))
 
 @app.route("/api/email-config", methods=["GET"])
 def api_get_email_config():
-    cfg = _load_email_cfg()
-    safe = {
-        "from":          cfg.get("from", ""),
-        "to":            cfg.get("to", ""),
-        "configured":    bool(cfg.get("app_password") and cfg.get("from")),
-        "cloud_managed": _is_cloud_mode(),
-        "smtp_host":     cfg.get("smtp_host", "smtp.gmail.com"),
-        "smtp_port":     cfg.get("smtp_port", 587),
-    }
-    return jsonify(safe)
-
+    return jsonify(_load_email_cfg())
 
 @app.route("/api/email-config", methods=["POST"])
 def api_save_email_config():
@@ -384,61 +339,38 @@ def api_save_email_config():
     })
     return jsonify(ok=True)
 
-
 @app.route("/api/email-config/test", methods=["POST"])
 def api_test_email():
-    body      = request.get_json(force=True, silent=True) or {}
-    # On cloud mode, use the env-var credentials (ignore body creds for security)
-    if _is_cloud_mode():
-        email_cfg = _load_email_cfg()
-        email_cfg["to"] = body.get("to") or email_cfg["to"]
-    else:
-        email_cfg = {
-            "from":         body.get("from", ""),
-            "to":           body.get("to", ""),
-            "app_password": body.get("app_password", ""),
-            "smtp_host":    body.get("smtp_host", "smtp.gmail.com"),
-            "smtp_port":    int(body.get("smtp_port", 587)),
-        }
+    body = request.get_json(force=True, silent=True) or {}
+    cfg = _load_email_cfg()
+    if not cfg["cloud_managed"]:
+        cfg["from"] = body.get("from") or cfg["from"]
+        cfg["app_password"] = body.get("app_password") or cfg["app_password"]
+    cfg["to"] = body.get("to") or cfg.get("to") or cfg.get("from")
 
-    fake_monitor = {"name": "Test Movie", "city": "Secunderabad",
-                    "url": "https://in.bookmyshow.com/"}
+    fake_monitor = {"name": "Test Movie", "city": "Hyderabad", "url": "https://in.bookmyshow.com/"}
     fake_changes = [
-        {"date": "Fri, 01 Sep", "theatre": "Test Theatre", "showtime": "06:30 PM",
-         "old_status": "sold-out", "new_status": "available", "change": "🟢 Tickets opened up!"},
+        {"date": "Today", "theatre": "Test Theatre", "showtime": "06:30 PM",
+         "old_status": "sold-out", "new_status": "available", "change": "🟢 Tickets opened up!"}
     ]
-
-    ok = notifier.send_alert(email_cfg, fake_monitor, fake_changes)
+    ok = notifier.send_alert(cfg, fake_monitor, fake_changes)
     if ok:
         return jsonify(ok=True, message="Test email sent!")
-    return jsonify(ok=False, message="Failed to send — check your credentials"), 500
+    return jsonify(ok=False, message="Failed to send — check credentials"), 500
 
+# ── DB Initialization on Startup ──────────────────────────────────────────────
 
-# ── Startup ───────────────────────────────────────────────────────────────────
+def _init():
+    try:
+        db.init_db()
+        logger.info("Database initialized")
+    except Exception as exc:
+        logger.warning("Database initialization deferred: %s", exc)
 
-def _startup() -> None:
-    db.init_db()
-    scheduler.start()
-    # Re-schedule all active monitors from the database
-    for m in db.get_monitors(active_only=True):
-        job_id   = f"mon_{m['id']}"
-        interval = max(5, m.get("interval_minutes", 15))
-        scheduler.add_job(
-            _run_check,
-            trigger=IntervalTrigger(minutes=interval),
-            args=[m["id"]],
-            id=job_id,
-            replace_existing=True,
-        )
-        logger.info("Restored monitor %d (%s) — every %d min", m["id"], m["name"], interval)
-    port = int(os.environ.get("PORT", 5055))
-    logger.info("BMS Monitor web app ready at http://localhost:%d", port)
+_init()
 
-
-# ── Entry point ───────────────────────────────────────────────────────────────
+# ── Entry Point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    _startup()
     port = int(os.environ.get("PORT", 5055))
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
-
+    app.run(host="0.0.0.0", port=port, debug=False)

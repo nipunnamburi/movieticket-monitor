@@ -1,6 +1,15 @@
 # BookMyShow Ticket Monitor 🎬
 
-Automatically monitors a BookMyShow movie page every 15 minutes and sends you a Gmail email alert whenever ticket availability changes.
+A modern BookMyShow ticket availability monitor with Web UI, automated diff detection, and Gmail email alerts. Supports both serverless cloud deployments (Vercel + Neon Postgres + GitHub Actions) and local/self-hosted runs.
+
+---
+
+## Key Features
+
+- 📱 **Responsive Web UI**: Manage monitors, filter theatres/dates/times, track alert history, and trigger instant manual checks.
+- ⚡ **Automated Diffing**: Tracks show additions, ticket availability changes, and sold-out states.
+- 📧 **Gmail SMTP Alerts**: Clean HTML & plain text alert notifications delivered straight to your inbox.
+- ☁️ **Dual Deployment**: Run serverless on Vercel with Neon Postgres and GitHub Actions, or locally with SQLite.
 
 ---
 
@@ -8,139 +17,69 @@ Automatically monitors a BookMyShow movie page every 15 minutes and sends you a 
 
 ```
 bookmyshow-monitor/
-├── monitor.py        # Main entry point (run by cron)
-├── scraper.py        # Headless Playwright browser scraper
-├── notifier.py       # Gmail SMTP email sender
-├── state.py          # Snapshot diffing and persistence
-├── config.yaml       # ← Edit this with your details
-├── state.json        # Auto-generated; stores last known snapshot
-├── monitor.log       # Auto-generated; cron log output
-├── requirements.txt
-├── setup.sh          # One-time setup
-└── install_cron.sh   # Install macOS cron job
+├── app.py                     # Unified Flask Web App & REST API
+├── db.py                      # Unified Database Layer (Neon Postgres / SQLite)
+├── scraper.py                 # Playwright Headless Browser Scraper
+├── state.py                   # Snapshot Diffing Engine
+├── notifier.py                # Gmail SMTP Email Alert Sender
+├── actions_runner.py          # GitHub Actions / Automated Monitor Runner
+├── monitor.py                 # CLI entry point
+├── static/                    # Frontend assets (app.js, Tailwind)
+├── templates/                 # Web UI template (index.html)
+├── vercel.json                # Vercel deployment config
+└── .github/workflows/         # GitHub Actions workflow for scheduled runs
 ```
 
 ---
 
-## Step 1 — Setup (run once)
+## Quick Start (Local Development)
+
+### 1. Installation
 
 ```bash
-cd /path/to/bookmyshow-monitor
 bash setup.sh
 ```
 
-This installs Python dependencies and downloads the Playwright Chromium browser (~150 MB).
-
----
-
-## Step 2 — Configure
-
-Open **`config.yaml`** and fill in:
-
-```yaml
-email:
-  from: "your.gmail@gmail.com"
-  to:   "alerts@example.com"
-  app_password: "xxxx xxxx xxxx xxxx"   # ← see below
-```
-
-### Getting a Gmail App Password
-
-1. Go to [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
-2. Sign in → click **"Create App Password"**
-3. Name it `bms-monitor` → copy the 16-character password
-4. Paste it into `config.yaml` (spaces are fine — Gmail ignores them)
-
-> **Note**: You need 2-Step Verification enabled on your Google account first.
-
----
-
-## Step 3 — Test email
+### 2. Run the Web Application
 
 ```bash
-python3 notifier.py --test
+python3 app.py
 ```
 
-You should receive a test email within 30 seconds.
+Open `http://localhost:5055` in your browser.
+
+### 3. Add a Monitor
+
+1. Open the Web UI at `http://localhost:5055`.
+2. Configure your Gmail email credentials under **Email Setup** (or via environment variables).
+3. Paste a BookMyShow movie/event URL and click **Start Monitoring**.
 
 ---
 
-## Step 4 — Test the scraper
+## Cloud Deployment (Vercel + Neon + GitHub Actions)
 
-```bash
-python3 monitor.py --dry-run
-```
+### Environment Variables
 
-This fetches the BookMyShow page and prints what it found — no email is sent, nothing is saved.
+Set the following environment variables in your Vercel project and GitHub repository secrets:
+
+- `DATABASE_URL`: Neon PostgreSQL connection string (`postgresql://...`)
+- `EMAIL_FROM`: Sender Gmail address
+- `EMAIL_APP_PASSWORD`: Gmail 16-character App Password
+- `EMAIL_TO`: Default recipient email address
+- `GITHUB_TOKEN`: Personal Access Token (for manual "Check Now" triggers)
+- `GITHUB_REPO`: `owner/repository`
 
 ---
 
-## Step 5 — First real run
+## CLI Usage
 
 ```bash
+# Check all active monitors in the database
 python3 monitor.py
-```
 
-This saves the current snapshot to `state.json`. No email is sent on the first run (nothing to compare against yet).
+# Test scrape without saving or emailing
+python3 monitor.py --dry-run
 
----
-
-## Step 6 — Install cron (automatic monitoring)
-
-```bash
-bash install_cron.sh
-```
-
-This sets up a macOS cron job that runs `monitor.py` every 15 minutes. Logs go to `monitor.log`.
-
-```bash
-# Watch live logs
-tail -f monitor.log
-
-# Remove the cron job
-crontab -l | grep -v '# bms-monitor' | crontab -
-```
-
----
-
-## What the email looks like
-
-When something changes you'll get an email like:
-
-| Theatre | Showtime | Change |
-|---|---|---|
-| PVR Forum | 06:30 PM | 🟢 Tickets opened up! |
-| INOX GVK One | 09:15 PM | 🆕 New show added |
-| Cinepolis | 03:00 PM | 🔴 Now sold out |
-
-With a **"Book Tickets on BookMyShow →"** button linking directly to the movie page.
-
----
-
-## Troubleshooting
-
-| Symptom | Fix |
-|---|---|
-| Scraper finds 0 theatres | BookMyShow blocked the request. It will retry next run automatically. |
-| Gmail auth error | Make sure you're using an **App Password**, not your regular Gmail password. |
-| Cron not firing | Ensure cron has disk access on macOS: System Settings → Privacy → Full Disk Access → add `cron`. |
-| No state.json after first run | Check `monitor.log` for errors. |
-
----
-
-## Adding more movies to monitor
-
-Edit `config.yaml` and add entries under `targets`:
-
-```yaml
-targets:
-  - name: "Bethlehem Kudumba Unit"
-    url: "https://in.bookmyshow.com/movies/secunderabad/bethlehem-kudumba-unit/ET00502829"
-    city: "Secunderabad"
-    theatres: []
-
-  - name: "Another Movie"
-    url: "https://in.bookmyshow.com/..."
-    city: "Hyderabad"
-    theatres: ["PVR: Inorbit Mall"]   # optional: filter to specific theatres
+# Check a specific monitor ID
+python3 monitor.py --monitor-id 1
 ```
