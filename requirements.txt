@@ -1,5 +1,7 @@
+# Vercel web UI requirements
+# (Playwright and APScheduler are NOT needed here — they run in GitHub Actions)
 flask>=3.0.0
-apscheduler>=3.10.4
-playwright>=1.44.0
+psycopg2-binary>=2.9.9
+requests>=2.31.0
 pyyaml>=6.0
 jinja2>=3.1.4
