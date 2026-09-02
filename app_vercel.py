@@ -173,6 +173,36 @@ def api_delete_monitor(mid):
     return jsonify(ok=ok) if ok else (jsonify(error="Not found"), 404)
 
 
+def _theatres_from_snapshot(snapshot: dict) -> list[str]:
+    """Extract unique theatre names from a date-keyed snapshot dict."""
+    theatres: set[str] = set()
+    for date_data in snapshot.values():
+        if isinstance(date_data, dict):
+            for key in date_data:
+                if key != "_page_hash":
+                    theatres.add(key)
+    return sorted(theatres)
+
+
+@app.route("/api/monitors/<int:mid>/theatres")
+def api_monitor_theatres(mid):
+    """Return theatre names known for a specific monitor (from its last snapshot)."""
+    m = db.get_monitor(mid)
+    if not m:
+        return jsonify([])
+    return jsonify(_theatres_from_snapshot(m.get("snapshot") or {}))
+
+
+@app.route("/api/theatres")
+def api_all_theatres():
+    """Return all theatre names seen across every monitor's snapshot.
+    Used for autocomplete in the Add Monitor form before a monitor is created."""
+    all_theatres: set[str] = set()
+    for m in db.get_monitors():
+        all_theatres.update(_theatres_from_snapshot(m.get("snapshot") or {}))
+    return jsonify(sorted(all_theatres))
+
+
 @app.route("/api/monitors/<int:mid>/pause", methods=["POST"])
 def api_pause_monitor(mid):
     m = db.toggle_pause(mid)

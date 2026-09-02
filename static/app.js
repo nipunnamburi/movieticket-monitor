@@ -12,11 +12,41 @@ const state = {
 window.addEventListener('DOMContentLoaded', () => {
   loadEmailConfig();
   loadMonitors();
+  loadTheatreSuggestions();           // populate Add form datalist
   // On mobile, default to "monitors" tab
   if (isMobile()) switchTab('monitors');
   // Auto-refresh every 30 s
   setInterval(loadMonitors, 30_000);
 });
+
+// ── Theatre autocomplete ───────────────────────────────────────────────────
+// Fetches all known theatre names from every monitor's snapshot
+// and populates the <datalist> for the Add form.
+async function loadTheatreSuggestions() {
+  try {
+    const res      = await api('GET', '/api/theatres');
+    const theatres = await res.json();
+    populateDatalist('theatreSuggestions', theatres);
+  } catch { /* silent — autocomplete is a nice-to-have */ }
+}
+
+// Fetches theatre names from a specific monitor's snapshot
+// and populates the <datalist> for the Edit modal.
+async function loadEditTheatreSuggestions(monitorId) {
+  try {
+    const res      = await api('GET', `/api/monitors/${monitorId}/theatres`);
+    const theatres = await res.json();
+    populateDatalist('editTheatreSuggestions', theatres);
+  } catch { /* silent */ }
+}
+
+function populateDatalist(datalistId, options) {
+  const dl = document.getElementById(datalistId);
+  if (!dl) return;
+  dl.innerHTML = options
+    .map(t => `<option value="${esc(t)}">`)
+    .join('');
+}
 
 function isMobile() { return window.innerWidth < 640; }
 
@@ -381,6 +411,8 @@ async function openEdit(id) {
   renderEditTags('editTheatreTags', state.editFilters.theatres, 'theatre');
   renderEditTags('editDateTags',    state.editFilters.dates,    'date');
   document.getElementById('editModal').classList.remove('hidden');
+  // Populate theatre autocomplete from this monitor's snapshot
+  loadEditTheatreSuggestions(id);
 }
 function closeEditModal() { document.getElementById('editModal').classList.add('hidden'); }
 
