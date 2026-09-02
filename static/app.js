@@ -217,6 +217,16 @@ function updateFilterBadge() {
 
 // ── Submit monitor ─────────────────────────────────────────────────────────
 async function submitMonitor() {
+  // Auto-add leftover text in inputs if user forgot to click '+' button
+  const pendingTheatre = document.getElementById('theatreInput')?.value.trim();
+  if (pendingTheatre && !state.filters.theatres.includes(pendingTheatre)) {
+    addFilter('theatre');
+  }
+  const pendingDate = document.getElementById('dateInput')?.value;
+  if (pendingDate && !state.filters.dates.includes(pendingDate)) {
+    addFilter('date');
+  }
+
   const url   = (state.cleanedUrl || document.getElementById('urlInput').value).trim();
   const email = document.getElementById('alertEmail').value.trim();
   const errEl = document.getElementById('formError');
