@@ -101,15 +101,24 @@ _USER_AGENT = (
 )
 
 _EXTRA_HEADERS = {
-    "Accept-Language": "en-IN,en;q=0.9",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"macOS"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
 }
 
-_STEALTH_SCRIPT = (
-    "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
-    "Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3]});"
-    "window.chrome = {runtime: {}};"
-)
+_STEALTH_SCRIPT = """
+    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+    Object.defineProperty(navigator, 'languages', {get: () => ['en-IN', 'en-US', 'en']});
+    Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+    window.chrome = { runtime: {} };
+"""
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -260,6 +269,17 @@ async def _scrape_page(page: Page, max_dates: int = 4) -> dict[str, Any]:
     Falls back to { "_page_hash": hash } if DOM parsing fails entirely.
     """
     await _dismiss_popups(page)
+
+    # If on movie details page, click "Book tickets" to open the showtimes page
+    try:
+        book_btn = page.locator('button:has-text("Book tickets"), a:has-text("Book tickets")').first
+        if await book_btn.is_visible(timeout=1500):
+            logger.info("  Clicking 'Book tickets' button...")
+            await book_btn.click()
+            await page.wait_for_timeout(3000)
+            await _dismiss_popups(page)
+    except Exception:
+        pass
 
     date_tabs = await _get_date_tabs(page)
     logger.info("  Found %d date tab(s)", len(date_tabs))
