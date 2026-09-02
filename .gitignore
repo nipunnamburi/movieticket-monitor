@@ -1,14 +1,16 @@
-# Byte-compiled / optimized / DLL files
+# Python
 __pycache__/
 *.pyc
 *.pyo
+
+# Credentials & local config
 .env
+config.yaml
 
 # Local database & logs
 monitors.db
 monitor.log
 state.json
-config.yaml
 
 # macOS
 .DS_Store

@@ -1,0 +1,47 @@
+name: BMS Monitor
+
+on:
+  schedule:
+    # Every 30 minutes. Change to "*/15 * * * *" if repo is public (unlimited minutes).
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    # Allows manual "Check Now" trigger from the web UI (via GitHub API)
+    inputs:
+      monitor_id:
+        description: "Monitor ID to check (leave empty to check all)"
+        required: false
+        default: ""
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────────
+      - uses: actions/checkout@v4
+
+      # ── 2. Python ──────────────────────────────────────────────────────────
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements-actions.txt
+
+      # ── 3. Install Python deps ─────────────────────────────────────────────
+      - name: Install Python dependencies
+        run: pip install -r requirements-actions.txt
+
+      # ── 4. Install Playwright Chromium ────────────────────────────────────
+      - name: Install Playwright Chromium
+        run: playwright install chromium --with-deps
+
+      # ── 5. Run the monitor check ──────────────────────────────────────────
+      - name: Run monitor checks
+        env:
+          DATABASE_URL:        ${{ secrets.DATABASE_URL }}
+          EMAIL_FROM:          ${{ secrets.EMAIL_FROM }}
+          EMAIL_APP_PASSWORD:  ${{ secrets.EMAIL_APP_PASSWORD }}
+          EMAIL_TO:            ${{ secrets.EMAIL_TO }}
+          MONITOR_ID:          ${{ github.event.inputs.monitor_id }}
+        run: python actions_runner.py

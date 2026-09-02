@@ -1,0 +1,6 @@
+# Requirements for Vercel web UI
+# (No Playwright — scraping happens in GitHub Actions)
+flask>=3.0.0
+psycopg2-binary>=2.9.9
+pyyaml>=6.0
+requests>=2.31.0
