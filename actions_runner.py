@@ -18,6 +18,7 @@ Environment variables (set as GitHub Secrets):
 import logging
 import os
 import sys
+from datetime import datetime, timezone
 
 import db_neon as db
 import notifier
@@ -30,6 +31,10 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 log = logging.getLogger(__name__)
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _email_cfg() -> dict:
@@ -49,27 +54,56 @@ def run_check(monitor: dict) -> None:
 
     # ── Scrape ──────────────────────────────────────────────────────────────
     try:
-        new_snapshot = scraper.scrape(monitor)
+        # scraper.scrape() returns {"shows": {date: {theatre: {time: status}}},
+        #                           "name": str, "url": str, "city": str, "error": str|None}
+        scrape_result = scraper.scrape(monitor)
     except Exception as exc:
         log.error("Scrape failed for #%d: %s", mid, exc)
         db.update_monitor(mid, {
             "last_error":   str(exc)[:400],
-            "last_checked": "now",
+            "last_checked": _now(),
+            "status":       "error",
+        })
+        return
+
+    # ── Check for scrape-level errors ────────────────────────────────────────
+    if scrape_result.get("error"):
+        log.warning("Scrape error for #%d: %s", mid, scrape_result["error"])
+        db.update_monitor(mid, {
+            "last_error":   scrape_result["error"][:400],
+            "last_checked": _now(),
+            "status":       "error",
+        })
+        return
+
+    # ── Extract the shows dict (date → theatre → time → status) ─────────────
+    # IMPORTANT: scrape_result["shows"] is the actual snapshot, not the full result dict
+    new_shows = scrape_result.get("shows") or {}
+    log.info("  Scrape returned %d date bucket(s)", len(new_shows))
+
+    if not new_shows:
+        log.warning("  Scraper returned empty shows — page may have changed structure")
+        log.warning("  Saving empty snapshot and continuing (no alert sent)")
+        db.update_monitor(mid, {
+            "last_checked": _now(),
+            "last_error":   "Scraper returned no shows — check GitHub Actions logs for selector debug info",
+            "status":       "error",
         })
         return
 
     # ── Apply filters ────────────────────────────────────────────────────────
     new_filtered = scraper.apply_filters(
-        new_snapshot,
+        new_shows,                                       # ← shows dict, NOT full result
         filter_theatres  = monitor.get("filter_theatres") or [],
         filter_dates     = monitor.get("filter_dates") or [],
         filter_time_from = monitor.get("filter_time_from") or "",
         filter_time_to   = monitor.get("filter_time_to") or "",
     )
 
-    old_snapshot = monitor.get("snapshot") or {}
+    # old snapshot stored in DB is already the shows dict
+    old_shows = monitor.get("snapshot") or {}
     old_filtered = scraper.apply_filters(
-        old_snapshot,
+        old_shows,
         filter_theatres  = monitor.get("filter_theatres") or [],
         filter_dates     = monitor.get("filter_dates") or [],
         filter_time_from = monitor.get("filter_time_from") or "",
@@ -78,20 +112,21 @@ def run_check(monitor: dict) -> None:
 
     # ── Diff ─────────────────────────────────────────────────────────────────
     changes = state.compute_diff(old_filtered, new_filtered)
+    log.info("  Diff: %d change(s) detected", len(changes))
 
-    # ── Persist snapshot ─────────────────────────────────────────────────────
+    # ── Persist snapshot (store only the shows dict, not the full result) ─────
     db.update_monitor(mid, {
-        "snapshot":     new_snapshot,
-        "last_checked": "now",
+        "snapshot":     new_shows,          # ← shows dict only
+        "last_checked": _now(),
         "last_error":   None,
         "status":       "active",
     })
 
     # ── Alert ────────────────────────────────────────────────────────────────
     if changes:
-        log.info("  → %d change(s) detected — sending alert", len(changes))
+        log.info("  Sending alert for %d change(s) to %s",
+                 len(changes), monitor.get("email_to"))
         email_cfg = _email_cfg()
-        # Per-monitor email override
         if monitor.get("email_to"):
             email_cfg["to"] = monitor["email_to"]
 
@@ -100,13 +135,12 @@ def run_check(monitor: dict) -> None:
             db.log_alert(mid, changes)
             log.info("  ✅ Alert sent to %s", email_cfg["to"])
         else:
-            log.warning("  ⚠ Alert failed to send")
+            log.warning("  ⚠ Alert failed to send — check EMAIL_FROM / EMAIL_APP_PASSWORD")
     else:
-        log.info("  → No changes")
+        log.info("  No changes since last check")
 
 
 def main() -> None:
-    # Ensure DB schema exists (idempotent)
     db.init_db()
 
     specific_id = os.environ.get("MONITOR_ID", "").strip()

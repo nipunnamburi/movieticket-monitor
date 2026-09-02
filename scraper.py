@@ -25,35 +25,55 @@ from playwright.async_api import async_playwright, Page, TimeoutError as PWTimeo
 
 logger = logging.getLogger(__name__)
 
-# ── Selectors (BMS changes class names; we try several) ──────────────────────
+# ── Selectors (BMS uses dynamic/obfuscated class names; try many patterns) ────
+# These are tried in order — first one that finds elements wins.
 
 _VENUE_SELECTORS = [
+    # 2024-2026 BMS patterns
     "[class*='venueInfoWrapper']",
-    "[class*='venue-wrapper']",
-    "[class*='__venue-name']",
+    "[class*='venue-info']",
     "[class*='venueName']",
+    "[class*='venue-name']",
+    "[class*='__venueName']",
+    "[class*='__venue-name']",
+    # Generic name patterns inside a card
+    "[class*='__name']",
     ".__name",
     "h3[class*='name']",
-    "[class*='__name']",
+    "[class*='cinema-name']",
+    "[class*='theater-name']",
+    # Fallback: any h3/h4 inside a showtime card
+    "[class*='show-card'] h3",
+    "[class*='showCard'] h3",
+    "[class*='venueBlock'] h3",
 ]
 
 _SHOWTIME_SELECTORS = [
+    "[class*='showtime-button']",
+    "[class*='showTimeButton']",
     "[class*='showtime']",
     "[class*='show-time']",
     "[class*='__time']",
+    "button[class*='time']",
+    "a[class*='time']",
     "time",
-    "[class*='sc-']",
 ]
 
 _DATE_TAB_SELECTORS = [
+    # 2024-2026 BMS date tab patterns
     "[class*='date-tab']",
     "[class*='dateTab']",
-    "[class*='__date']",
-    "[class*='slickSlide'] [class*='date']",
-    ".slick-slide [class*='date']",
+    "[class*='DateTabs'] li",
+    "[class*='date-tabs'] li",
     "[class*='date-selector'] li",
+    "[class*='dateSelector'] li",
     "[class*='BookShowDate']",
     "[class*='dateCard']",
+    ".slick-slide [class*='date']",
+    "[class*='slickSlide'] [class*='date']",
+    # Generic: li items inside anything with "date" in the class
+    "ul[class*='date'] li",
+    "[class*='calendar'] li",
 ]
 
 _DATE_CONTAINER_SELECTORS = [
@@ -69,6 +89,7 @@ _LAUNCH_ARGS = [
     "--no-sandbox",
     "--disable-blink-features=AutomationControlled",
     "--disable-dev-shm-usage",
+    "--disable-gpu",
 ]
 
 _VIEWPORT = {"width": 1366, "height": 768}
@@ -87,6 +108,7 @@ _EXTRA_HEADERS = {
 _STEALTH_SCRIPT = (
     "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
     "Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3]});"
+    "window.chrome = {runtime: {}};"
 )
 
 
