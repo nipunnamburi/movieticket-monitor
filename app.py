@@ -276,9 +276,16 @@ def api_create_monitor():
 @app.route("/api/monitors/<int:mid>", methods=["PATCH"])
 def api_update_monitor(mid: int):
     body = request.get_json(force=True, silent=True) or {}
+    # If filters were updated, reset last_alert so next check sends a fresh status report
+    if any(k in body for k in ("filter_theatres", "filter_dates", "filter_time_from", "filter_time_to")):
+        body["last_alert"] = None
     updated = db.update_monitor(mid, body)
     if not updated:
         return jsonify(error="Not found"), 404
+    # Trigger an immediate check via GitHub Actions / local runner
+    if not _trigger_github_check(mid):
+        t = threading.Thread(target=_run_local_check, args=(mid,), daemon=True)
+        t.start()
     return jsonify(updated)
 
 @app.route("/api/monitors/<int:mid>", methods=["DELETE"])

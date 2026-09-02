@@ -112,6 +112,27 @@ def run_check(monitor: dict) -> None:
 
     # ── Diff ─────────────────────────────────────────────────────────────────
     changes = state.compute_diff(old_filtered, new_filtered)
+
+    # ── Initial Alert Override ───────────────────────────────────────────────
+    # If no alert has ever been sent for this monitor (or filters were recently updated),
+    # and matching shows exist, report current availability immediately rather than staying silent.
+    if not changes and not monitor.get("last_alert"):
+        log.info("  First alert for monitor #%d — generating current status report", mid)
+        for date_label, theatres in new_filtered.items():
+            if date_label == "_page_hash" or not isinstance(theatres, dict):
+                continue
+            for theatre, times in theatres.items():
+                if isinstance(times, dict):
+                    for showtime, status in times.items():
+                        changes.append({
+                            "date": date_label,
+                            "theatre": theatre,
+                            "showtime": showtime,
+                            "old_status": "initial scan",
+                            "new_status": status,
+                            "change": f"🟢 Currently {status.replace('-', ' ').title()}",
+                        })
+
     log.info("  Diff: %d change(s) detected", len(changes))
 
     # ── Persist snapshot (store only the shows dict, not the full result) ─────
