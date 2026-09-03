@@ -320,11 +320,19 @@ def api_check_now(mid: int):
     m = db.get_monitor(mid)
     if not m:
         return jsonify(error="Not found"), 404
+
+    # If GitHub Actions environment variables are set, dispatch workflow
     if _trigger_github_check(mid):
         return jsonify(ok=True, message="Check triggered via GitHub Actions (~30s)")
-    t = threading.Thread(target=_run_local_check, args=(mid,), daemon=True)
-    t.start()
-    return jsonify(ok=True, message="Local check triggered — results will arrive shortly")
+
+    # Otherwise run check directly and return updated monitor
+    _run_local_check(mid)
+    updated = db.get_monitor(mid)
+    return jsonify(
+        ok=True,
+        monitor=updated,
+        message="Check completed successfully!",
+    )
 
 @app.route("/api/monitors/<int:mid>/alerts", methods=["GET"])
 def api_alerts(mid: int):

@@ -518,16 +518,19 @@ function makeCard(m) {
 async function checkNow(id) {
   const btn = document.getElementById(`checkBtn-${id}`);
   if (btn) { btn.innerHTML = '⟳ Checking…'; btn.disabled = true; }
-  toast('Check triggered via GitHub Actions / local runner…');
   try {
-    await api('POST', `/api/monitors/${id}/check`);
+    const res = await api('POST', `/api/monitors/${id}/check`);
+    const data = await res.json();
+    if (res.ok) {
+      toast(data.message || '✅ Check completed!', 'success');
+    } else {
+      toast(data.error || 'Check failed', 'error');
+    }
   } catch {
-    toast('Check failed', 'error');
+    toast('Network error during check', 'error');
   } finally {
-    setTimeout(() => {
-      if (btn) { btn.innerHTML = '↻ Check'; btn.disabled = false; }
-      loadMonitors();
-    }, 4000);
+    if (btn) { btn.innerHTML = '↻ Check'; btn.disabled = false; }
+    await loadMonitors();
   }
 }
 
