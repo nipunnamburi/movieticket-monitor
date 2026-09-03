@@ -99,48 +99,18 @@ _ROW = (
 )
 
 
-_MONTHS_SHORT = {
-    "Jan": "01", "Feb": "02", "Mar": "03", "Apr": "04",
-    "May": "05", "Jun": "06", "Jul": "07", "Aug": "08",
-    "Sep": "09", "Oct": "10", "Nov": "11", "Dec": "12",
-}
-
-
-def _date_label_to_code(label: str) -> str:
+def _build_book_url(monitor_url: str, date_code: str) -> str:
     """
-    Convert 'Thu, 04 Sep' → '20260904'.
-    Assumes the nearest future year matching that month/day.
+    Construct a direct buytickets URL using the canonical YYYYMMDD date code.
+    e.g. "20260904" → .../buytickets/ET00515244/20260904
     """
     import re
-    from datetime import date, timedelta
-    m = re.search(r"(\d{1,2})\s+([A-Za-z]+)", label)
-    if not m:
-        return ""
-    day = m.group(1).zfill(2)
-    month = _MONTHS_SHORT.get(m.group(2)[:3].capitalize(), "")
-    if not month:
-        return ""
-    today = date.today()
-    for year in (today.year, today.year + 1):
-        try:
-            candidate = date(year, int(month), int(day))
-            if candidate >= today:
-                return candidate.strftime("%Y%m%d")
-        except ValueError:
-            continue
-    return ""
-
-
-def _build_book_url(monitor_url: str, date_label: str) -> str:
-    """Construct a direct buytickets URL for a specific date."""
-    import re
-    date_code = _date_label_to_code(date_label)
-    # Extract event code from URL
+    if not date_code:
+        return monitor_url
     m = re.search(r"/(ET\d{8})", monitor_url)
-    if not m or not date_code:
+    if not m:
         return monitor_url
     event_code = m.group(1)
-    # Build base from movie URL (strip /buytickets/... if already present)
     base = re.sub(r"/buytickets/.*", "", monitor_url.split("?")[0].rstrip("/"))
     return f"{base}/buytickets/{event_code}/{date_code}"
 

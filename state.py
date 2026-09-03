@@ -75,11 +75,21 @@ def compute_diff(old: dict[str, Any], new: dict[str, Any]) -> list[dict[str, str
     Compare two filtered snapshots and return ALL change records.
     Callers use availability_openings() to select only alert-worthy items.
 
-    Each record: { date, theatre, showtime, old_status, new_status, change }
+    Each record: { date, date_code, theatre, showtime, old_status, new_status, change }
+      - date      : display label e.g. "Fri, 04 Sep"
+      - date_code : canonical YYYYMMDD e.g. "20260904" (from _date_codes metadata)
     """
     changes: list[dict[str, str]] = []
 
-    all_dates = sorted(set(old.keys()) | set(new.keys()))
+    # Merge _date_codes from both snapshots (new takes precedence)
+    date_codes: dict[str, str] = {}
+    date_codes.update(old.get("_date_codes") or {})
+    date_codes.update(new.get("_date_codes") or {})
+
+    all_dates = sorted(
+        k for k in set(old.keys()) | set(new.keys())
+        if k not in ("_page_hash", "_date_codes")
+    )
 
     for date_label in all_dates:
         old_theatres: dict = old.get(date_label) or {}
@@ -117,6 +127,7 @@ def compute_diff(old: dict[str, Any], new: dict[str, Any]) -> list[dict[str, str
 
                 changes.append({
                     "date":       date_label,
+                    "date_code":  date_codes.get(date_label, ""),  # canonical YYYYMMDD
                     "theatre":    theatre,
                     "showtime":   showtime,
                     "old_status": stored_old,

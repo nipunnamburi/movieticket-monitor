@@ -312,16 +312,25 @@ async def fetch_snapshot(target: dict[str, Any]) -> dict[str, Any]:
                 result["error"] = "BMS API call not captured — page may have failed to load"
                 return result
 
-            # Build snapshot: { "Thu, 04 Sep": { venue: { time: status } } }
+            # Build snapshot: { "Fri, 04 Sep": { venue: { time: status } } }
+            # Also store "_date_codes" metadata: display_label → YYYYMMDD
+            # This lets downstream code (notifier, state) construct booking URLs
+            # from the canonical date code without any fragile text-to-date parsing.
             snapshot: dict[str, Any] = {}
+            date_codes_map: dict[str, str] = {}
+
             for dc, resp in api_responses.items():
                 date_label = _date_code_to_label(dc)
                 shows = _parse_api_response(resp)
                 if shows:
                     snapshot[date_label] = shows
-                    logger.info("  %s → %d venue(s)", date_label, len(shows))
+                    date_codes_map[date_label] = dc
+                    logger.info("  %s (%s) → %d venue(s)", date_label, dc, len(shows))
                 else:
-                    logger.warning("  %s → 0 venues parsed from API", date_label)
+                    logger.warning("  %s (%s) → 0 venues parsed from API", date_label, dc)
+
+            if date_codes_map:
+                snapshot["_date_codes"] = date_codes_map  # metadata, not show data
 
             result["shows"] = snapshot
 
@@ -352,9 +361,14 @@ def apply_filters(
     """
     result: dict[str, Any] = {}
 
+    # Propagate the canonical date-code map so state.py and notifier.py
+    # can build booking URLs without text-to-date guessing.
+    if "_date_codes" in snapshot:
+        result["_date_codes"] = snapshot["_date_codes"]
+
     for date_label, theatres in snapshot.items():
-        if date_label == "_page_hash":
-            # Legacy hash-mode snapshot — skip, we don't use hashes anymore
+        if date_label in ("_page_hash", "_date_codes"):
+            # Internal metadata — not show data
             continue
 
         # Date filter — flexible matching: "04 Sep", "Thu, 04 Sep", "20260904" all match
