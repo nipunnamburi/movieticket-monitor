@@ -151,13 +151,12 @@ def _extract_region_and_event(url: str) -> tuple[str, str]:
 
 async def _intercept_api(page: Page, url: str, date_codes: list[str]) -> dict[str, Any]:
     """
-    Load the BMS buytickets page and intercept the JSON API response.
-    Returns: { "date_label": { venue: { time: status } } }
+    Load the BMS buytickets page and intercept/extract the JSON API response.
+    Returns: { date_code: API_data_dict }
     """
-    region, event_code = _extract_region_and_event(url)
     all_api_responses: dict[str, Any] = {}  # date_code → JSON response
 
-    # Register response interceptor BEFORE navigation
+    # Register response interceptor BEFORE navigation (for XHR requests)
     async def on_response(response):
         if "showtimes-by-event" in response.url and "primary-dynamic" in response.url:
             dc_match = re.search(r"dateCode=(\d{8})", response.url)
@@ -165,18 +164,38 @@ async def _intercept_api(page: Page, url: str, date_codes: list[str]) -> dict[st
             try:
                 data = await response.json()
                 all_api_responses[dc] = data
-                logger.info("  ✅ Captured API for dateCode=%s (%d venues)", dc,
-                            sum(1 for w in data.get("data", {}).get("showtimeWidgets", [])
-                                if w.get("type") == "groupList"
-                                for g in w.get("data", [])
-                                for i in g.get("data", [])
-                                if i.get("type") == "venue-card"))
             except Exception as exc:
                 logger.warning("  API response parse error: %s", exc)
 
     page.on("response", on_response)
 
-    # Navigate to first date to get the API call
+    # Helper function to extract window.__INITIAL_STATE__ data directly
+    async def extract_initial_state():
+        try:
+            state_data = await page.evaluate('''() => {
+                const queries = window.__INITIAL_STATE__?.showtimesFunctionalApi?.queries;
+                if (!queries) return null;
+                for (const k in queries) {
+                    if (k.startsWith('fetchPrimaryDynamic')) {
+                        const parts = k.split('-');
+                        // Key format: fetchPrimaryDynamic-ET00515244---20260904-HYD
+                        for (const p of parts) {
+                            if (/^\d{8}$/.test(p)) {
+                                return { dateCode: p, data: queries[k].data };
+                            }
+                        }
+                    }
+                }
+                return null;
+            }''')
+            if state_data and state_data.get("dateCode") and state_data.get("data"):
+                dc = state_data["dateCode"]
+                all_api_responses[dc] = state_data["data"]
+                logger.info("  ✅ Extracted initial state for dateCode=%s", dc)
+        except Exception as exc:
+            logger.warning("  Initial state extraction warning: %s", exc)
+
+    # Navigate to first date
     first_date = date_codes[0] if date_codes else None
     nav_url = _build_buytickets_url(url, first_date)
     logger.info("  Loading: %s", nav_url)
@@ -187,6 +206,7 @@ async def _intercept_api(page: Page, url: str, date_codes: list[str]) -> dict[st
         logger.warning("  DOM load timeout — continuing")
 
     await page.wait_for_timeout(4000)
+    await extract_initial_state()
 
     # If multiple dates needed and not already captured, navigate to each
     for dc in date_codes[1:]:
@@ -195,6 +215,7 @@ async def _intercept_api(page: Page, url: str, date_codes: list[str]) -> dict[st
                 nav2 = _build_buytickets_url(url, dc)
                 await page.goto(nav2, wait_until="domcontentloaded", timeout=30_000)
                 await page.wait_for_timeout(3000)
+                await extract_initial_state()
             except Exception:
                 pass
 
@@ -211,13 +232,32 @@ def _parse_api_response(api_response: dict) -> tuple[dict[str, dict[str, str]], 
     detected_lang = ""
     try:
         data = api_response.get("data", {})
-        header = data.get("header", {})
-        subtitle = ((header.get("subtitle") or {}).get("text") or "").strip()
-        # Subtitle often contains language/dimension e.g. "Telugu, 2D"
-        if subtitle:
-            parts = [p.strip() for p in subtitle.split(",")]
-            if parts:
-                detected_lang = parts[0]
+        
+        # Check topStickyWidgets for language title (e.g. "Telugu  •  2D")
+        top_widgets = data.get("topStickyWidgets", [])
+        for w in top_widgets:
+            if w.get("type") == "horizontal-text-list":
+                for item in w.get("data", []):
+                    left_text = item.get("leftText", {}).get("data", [])
+                    for lt in left_text:
+                        for comp in lt.get("components", []):
+                            txt = comp.get("text", "").strip()
+                            if "•" in txt:
+                                lang_part = txt.split("•")[0].strip()
+                                if lang_part:
+                                    detected_lang = lang_part
+                                    break
+                            elif txt and txt not in ("Change",):
+                                detected_lang = txt
+                                break
+
+        if not detected_lang:
+            header = data.get("header", {})
+            subtitle = ((header.get("subtitle") or {}).get("text") or "").strip()
+            if subtitle:
+                parts = [p.strip() for p in subtitle.split(",")]
+                if parts and not parts[0].startswith("Movie runtime"):
+                    detected_lang = parts[0]
 
         widgets = data.get("showtimeWidgets", [])
         for widget in widgets:
