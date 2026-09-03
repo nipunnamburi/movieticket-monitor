@@ -321,17 +321,31 @@ def api_check_now(mid: int):
     if not m:
         return jsonify(error="Not found"), 404
 
-    # If GitHub Actions environment variables are set, dispatch workflow
+    # 1. Try triggering GitHub Actions workflow (for production / cloud Vercel)
     if _trigger_github_check(mid):
-        return jsonify(ok=True, message="Check triggered via GitHub Actions (~30s)")
+        return jsonify(
+            ok=True,
+            mode="github",
+            message="⚡ Check dispatched to GitHub Actions! Results will update in ~30s.",
+        )
 
-    # Otherwise run check directly and return updated monitor
-    _run_local_check(mid)
-    updated = db.get_monitor(mid)
+    # 2. If running on Vercel without GITHUB_TOKEN set
+    if os.environ.get("VERCEL"):
+        t = threading.Thread(target=_run_local_check, args=(mid,), daemon=True)
+        t.start()
+        return jsonify(
+            ok=True,
+            mode="async",
+            message="Check queued! (Add GITHUB_TOKEN to Vercel env vars for automated cloud runs)",
+        )
+
+    # 3. Running locally on dev machine where Playwright is installed
+    t = threading.Thread(target=_run_local_check, args=(mid,), daemon=True)
+    t.start()
     return jsonify(
         ok=True,
-        monitor=updated,
-        message="Check completed successfully!",
+        mode="local",
+        message="Local check running in background — updating shortly!",
     )
 
 @app.route("/api/monitors/<int:mid>/alerts", methods=["GET"])

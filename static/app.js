@@ -519,18 +519,19 @@ async function checkNow(id) {
   const btn = document.getElementById(`checkBtn-${id}`);
   if (btn) { btn.innerHTML = '⟳ Checking…'; btn.disabled = true; }
   try {
-    const res = await api('POST', `/api/monitors/${id}/check`);
+    const res  = await api('POST', `/api/monitors/${id}/check`);
     const data = await res.json();
     if (res.ok) {
-      toast(data.message || '✅ Check completed!', 'success');
+      toast(data.message || '⚡ Check dispatched!', 'success');
     } else {
       toast(data.error || 'Check failed', 'error');
     }
-  } catch {
+  } catch (err) {
     toast('Network error during check', 'error');
   } finally {
     if (btn) { btn.innerHTML = '↻ Check'; btn.disabled = false; }
-    await loadMonitors();
+    setTimeout(loadMonitors, 4000);
+    setTimeout(loadMonitors, 15000);
   }
 }
 
