@@ -100,6 +100,7 @@ def run_check(monitor: dict) -> None:
         filter_dates     = monitor.get("filter_dates") or [],
         filter_time_from = monitor.get("filter_time_from") or "",
         filter_time_to   = monitor.get("filter_time_to") or "",
+        filter_language  = monitor.get("language") or "",
     )
     new_filtered = scraper.apply_filters(new_shows, **filter_kwargs)
 

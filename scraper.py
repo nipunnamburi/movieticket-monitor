@@ -203,13 +203,23 @@ async def _intercept_api(page: Page, url: str, date_codes: list[str]) -> dict[st
 
 # ── Parse API response into snapshot dict ────────────────────────────────────
 
-def _parse_api_response(api_response: dict) -> dict[str, dict[str, str]]:
+def _parse_api_response(api_response: dict) -> tuple[dict[str, dict[str, str]], str]:
     """
-    Parse one BMS showtimes API response into { venue: { time: status } }.
+    Parse one BMS showtimes API response into ({ venue: { time: status } }, language).
     """
     shows: dict[str, dict[str, str]] = {}
+    detected_lang = ""
     try:
-        widgets = api_response.get("data", {}).get("showtimeWidgets", [])
+        data = api_response.get("data", {})
+        header = data.get("header", {})
+        subtitle = ((header.get("subtitle") or {}).get("text") or "").strip()
+        # Subtitle often contains language/dimension e.g. "Telugu, 2D"
+        if subtitle:
+            parts = [p.strip() for p in subtitle.split(",")]
+            if parts:
+                detected_lang = parts[0]
+
+        widgets = data.get("showtimeWidgets", [])
         for widget in widgets:
             if widget.get("type") != "groupList":
                 continue
@@ -236,7 +246,7 @@ def _parse_api_response(api_response: dict) -> dict[str, dict[str, str]]:
                         shows[venue_name] = times
     except Exception as exc:
         logger.warning("  API parse error: %s", exc)
-    return shows
+    return shows, detected_lang
 
 
 # ── Determine date codes to check ────────────────────────────────────────────
@@ -313,15 +323,16 @@ async def fetch_snapshot(target: dict[str, Any]) -> dict[str, Any]:
                 return result
 
             # Build snapshot: { "Fri, 04 Sep": { venue: { time: status } } }
-            # Also store "_date_codes" metadata: display_label → YYYYMMDD
-            # This lets downstream code (notifier, state) construct booking URLs
-            # from the canonical date code without any fragile text-to-date parsing.
+            # Also store "_date_codes" and "_language" metadata
             snapshot: dict[str, Any] = {}
             date_codes_map: dict[str, str] = {}
+            detected_language = target.get("language", "")
 
             for dc, resp in api_responses.items():
                 date_label = _date_code_to_label(dc)
-                shows = _parse_api_response(resp)
+                shows, lang = _parse_api_response(resp)
+                if lang:
+                    detected_language = lang
                 if shows:
                     snapshot[date_label] = shows
                     date_codes_map[date_label] = dc
@@ -331,6 +342,8 @@ async def fetch_snapshot(target: dict[str, Any]) -> dict[str, Any]:
 
             if date_codes_map:
                 snapshot["_date_codes"] = date_codes_map  # metadata, not show data
+            if detected_language:
+                snapshot["_language"] = detected_language
 
             result["shows"] = snapshot
 
@@ -354,20 +367,30 @@ def apply_filters(
     filter_dates: list[str],
     filter_time_from: str,
     filter_time_to: str,
+    filter_language: str = "",
 ) -> dict[str, Any]:
     """
     Return a subset of `snapshot` matching the given filters.
     All filters are optional (empty list / empty string = no filter).
     """
+    # Language filter check — if configured, compare with snapshot language metadata or target language
+    if filter_language:
+        snap_lang = snapshot.get("_language", "")
+        if snap_lang and filter_language.strip().lower() not in snap_lang.strip().lower():
+            logger.info("Snapshot language '%s' does not match filter language '%s' — returning empty",
+                        snap_lang, filter_language)
+            return {}
+
     result: dict[str, Any] = {}
 
-    # Propagate the canonical date-code map so state.py and notifier.py
-    # can build booking URLs without text-to-date guessing.
+    # Propagate canonical date-code map and language metadata
     if "_date_codes" in snapshot:
         result["_date_codes"] = snapshot["_date_codes"]
+    if "_language" in snapshot:
+        result["_language"] = snapshot["_language"]
 
     for date_label, theatres in snapshot.items():
-        if date_label in ("_page_hash", "_date_codes"):
+        if date_label in ("_page_hash", "_date_codes", "_language"):
             # Internal metadata — not show data
             continue
 

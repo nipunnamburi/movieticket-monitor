@@ -133,6 +133,7 @@ async function cleanUrl() {
     showUrlPreview(data.url);
     if (data.name) document.getElementById('movieName').value = data.name;
     if (data.city) document.getElementById('movieCity').value = data.city;
+    if (data.language) document.getElementById('movieLanguage').value = data.language;
     toast('✓ URL extracted!', 'success');
   } catch { toast('Network error', 'error'); }
   finally {
@@ -155,6 +156,8 @@ async function autoDetect(url) {
         document.getElementById('movieName').value = data.name;
       if (data.city && !document.getElementById('movieCity').value)
         document.getElementById('movieCity').value = data.city;
+      if (data.language && !document.getElementById('movieLanguage').value)
+        document.getElementById('movieLanguage').value = data.language;
     }
   } catch { /* silent */ }
 }
@@ -244,6 +247,7 @@ async function submitMonitor() {
       url,
       name:             document.getElementById('movieName').value.trim(),
       city:             document.getElementById('movieCity').value.trim(),
+      language:         document.getElementById('movieLanguage').value.trim(),
       email_to:         email,
       filter_theatres:  state.filters.theatres,
       filter_dates:     filterDates,
@@ -268,7 +272,7 @@ function showFormError(msg) {
 }
 
 function resetForm() {
-  ['urlInput','alertEmail','movieName','movieCity'].forEach(id => document.getElementById(id).value = '');
+  ['urlInput','alertEmail','movieName','movieCity','movieLanguage'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('urlPreview').classList.add('hidden');
   document.getElementById('cleanBtnWrap').classList.add('hidden');
   document.getElementById('formError').classList.add('hidden');
@@ -319,6 +323,8 @@ function makeCard(m) {
   }[m.status] || { dot: 'bg-zinc-500', label: m.status, text: 'text-zinc-400' };
 
   const filters = [];
+  if (m.language)
+    filters.push(`<span class="chip bg-zinc-800 text-zinc-400 text-xs">🗣️ ${esc(m.language)}</span>`);
   if (m.filter_theatres?.length)
     filters.push(`<span class="chip bg-zinc-800 text-zinc-500 text-xs">🏢 ${esc(m.filter_theatres.join(', '))}</span>`);
   if (m.filter_dates?.length)
@@ -336,7 +342,7 @@ function makeCard(m) {
     <div class="flex items-start justify-between gap-2 mb-2">
       <div class="min-w-0">
         <div class="font-semibold text-sm truncate text-zinc-100">${esc(m.name)}</div>
-        <div class="text-xs text-zinc-600 mt-0.5">${esc(m.city||'—')} · every ${m.interval_minutes} min</div>
+        <div class="text-xs text-zinc-600 mt-0.5">${esc(m.city||'—')}${m.language ? ' · ' + esc(m.language) : ''} · every ${m.interval_minutes} min</div>
       </div>
       <div class="flex items-center gap-1.5 shrink-0 mt-0.5">
         <span class="w-2 h-2 rounded-full ${S.dot} shrink-0"></span>
@@ -412,6 +418,7 @@ async function openEdit(id) {
   const m   = await res.json();
   document.getElementById('editId').value        = m.id;
   document.getElementById('editName').value      = m.name;
+  document.getElementById('editLanguage').value  = m.language || '';
   document.getElementById('editEmail').value     = m.email_to;
   document.getElementById('editTimeFrom').value  = m.filter_time_from || '';
   document.getElementById('editTimeTo').value    = m.filter_time_to   || '';
@@ -460,6 +467,7 @@ async function saveEdit() {
   const filterDates = state.editFilters.dates.map(d => /^\d{4}-\d{2}-\d{2}$/.test(d) ? fmtDate(d) : d);
   await api('PATCH', `/api/monitors/${id}`, {
     name:             document.getElementById('editName').value.trim(),
+    language:         document.getElementById('editLanguage').value.trim(),
     email_to:         document.getElementById('editEmail').value.trim(),
     filter_theatres:  state.editFilters.theatres,
     filter_dates:     filterDates,

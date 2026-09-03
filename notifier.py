@@ -128,6 +128,8 @@ def _badge(change: str) -> str:
 
 def _build_filters_html(monitor: dict) -> str:
     parts = []
+    if monitor.get("language"):
+        parts.append("🗣️ " + monitor["language"])
     if monitor.get("filter_theatres"):
         parts.append("🏢 " + ", ".join(monitor["filter_theatres"]))
     if monitor.get("filter_dates"):

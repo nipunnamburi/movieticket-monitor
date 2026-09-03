@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS monitors (
     name              TEXT    NOT NULL DEFAULT '',
     url               TEXT    NOT NULL,
     city              TEXT    NOT NULL DEFAULT '',
+    language          TEXT    NOT NULL DEFAULT '',
     email_to          TEXT    NOT NULL DEFAULT '',
     filter_theatres   TEXT    NOT NULL DEFAULT '[]',
     filter_dates      TEXT    NOT NULL DEFAULT '[]',
@@ -95,6 +96,7 @@ CREATE TABLE IF NOT EXISTS monitors (
     name             TEXT    NOT NULL DEFAULT '',
     url              TEXT    NOT NULL,
     city             TEXT    NOT NULL DEFAULT '',
+    language         TEXT    NOT NULL DEFAULT '',
     email_to         TEXT    NOT NULL DEFAULT '',
     filter_theatres  JSONB   NOT NULL DEFAULT '[]',
     filter_dates     JSONB   NOT NULL DEFAULT '[]',
@@ -123,8 +125,18 @@ def init_db() -> None:
         cur = con.cursor()
         if is_postgres():
             cur.execute(_POSTGRES_SCHEMA)
+            # Migration check for existing tables
+            try:
+                cur.execute("ALTER TABLE monitors ADD COLUMN IF NOT EXISTS language TEXT NOT NULL DEFAULT ''")
+            except Exception:
+                pass
         else:
             cur.executescript(_SQLITE_SCHEMA)
+            # Migration check for existing SQLite tables
+            try:
+                cur.execute("ALTER TABLE monitors ADD COLUMN language TEXT NOT NULL DEFAULT ''")
+            except Exception:
+                pass
 
 # ── Deserialisation Helpers ────────────────────────────────────────────────────
 
@@ -177,7 +189,7 @@ def get_monitor(monitor_id: int) -> dict | None:
 def create_monitor(data: dict) -> dict:
     now = _now_iso()
     fields = (
-        "name", "url", "city", "email_to",
+        "name", "url", "city", "language", "email_to",
         "filter_theatres", "filter_dates",
         "filter_time_from", "filter_time_to",
         "interval_minutes",
@@ -204,14 +216,15 @@ def create_monitor(data: dict) -> dict:
             cur = con.cursor()
             cur.execute(
                 """INSERT INTO monitors
-                   (name, url, city, email_to,
+                   (name, url, city, language, email_to,
                     filter_theatres, filter_dates, filter_time_from, filter_time_to,
                     interval_minutes, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     data.get("name", ""),
                     data["url"],
                     data.get("city", ""),
+                    data.get("language", ""),
                     data.get("email_to", ""),
                     json.dumps(data.get("filter_theatres") or []),
                     json.dumps(data.get("filter_dates") or []),
@@ -226,7 +239,7 @@ def create_monitor(data: dict) -> dict:
 
 def update_monitor(monitor_id: int, data: dict) -> dict | None:
     allowed = {
-        "name", "url", "city", "email_to",
+        "name", "url", "city", "language", "email_to",
         "filter_theatres", "filter_dates",
         "filter_time_from", "filter_time_to",
         "status", "interval_minutes",

@@ -119,22 +119,29 @@ def _extract_bms_url(text: str) -> str | None:
         return None
     return m.group(0).rstrip(".,;)")
 
-def _parse_movie_info(url: str) -> tuple[str, str]:
+def _parse_movie_info(url: str) -> tuple[str, str, str]:
+    """Return (name, city, language) extracted from URL."""
+    name, city, lang = "", "", ""
+    m_lang = re.search(r"[?&]language=([^&]+)", url, re.IGNORECASE)
+    if m_lang:
+        lang = m_lang.group(1).capitalize()
+
     m = re.search(r"/movies/([^/?#]+)/([^/?#]+)/", url)
     if m:
         city = m.group(1).replace("-", " ").title()
         name = m.group(2).replace("-", " ").title()
-        return name, city
+        return name, city, lang
 
     m = re.search(r"/buytickets/([^/?#]+)/", url)
     if m:
-        return m.group(1).replace("-", " ").title(), ""
+        return m.group(1).replace("-", " ").title(), "", lang
 
     m = re.search(r"/events/([^/?#]+)/", url)
     if m:
-        return m.group(1).replace("-", " ").title(), ""
+        return m.group(1).replace("-", " ").title(), "", lang
 
-    return "", ""
+    return name, city, lang
+
 
 # ── Check Triggering (GitHub Actions or Local Thread) ──────────────────────────
 
@@ -173,6 +180,7 @@ def _run_local_check(monitor_id: int) -> None:
         filter_dates     = m.get("filter_dates") or [],
         filter_time_from = m.get("filter_time_from") or "",
         filter_time_to   = m.get("filter_time_to") or "",
+        filter_language  = m.get("language") or "",
     )
     old_shows    = m.get("snapshot") or {}
     old_filtered = scraper.apply_filters(old_shows, **flt)
@@ -225,8 +233,8 @@ def api_clean_url():
     url = _extract_bms_url(body.get("text", ""))
     if not url:
         return jsonify(error="No BookMyShow URL found"), 400
-    name, city = _parse_movie_info(url)
-    return jsonify(url=url, name=name, city=city)
+    name, city, lang = _parse_movie_info(url)
+    return jsonify(url=url, name=name, city=city, language=lang)
 
 @app.route("/api/monitors", methods=["GET"])
 def api_list_monitors():
@@ -255,7 +263,7 @@ def api_create_monitor():
     cleaned = _extract_bms_url(url)
     if cleaned:
         url = cleaned
-    parsed_name, parsed_city = _parse_movie_info(url)
+    parsed_name, parsed_city, parsed_lang = _parse_movie_info(url)
     email_to = body.get("email_to", "").strip()
     if not email_to:
         return jsonify(error="email_to is required"), 400
@@ -264,6 +272,7 @@ def api_create_monitor():
         "name":             body.get("name") or parsed_name or url,
         "url":              url,
         "city":             body.get("city") or parsed_city,
+        "language":         body.get("language") or parsed_lang,
         "email_to":         email_to,
         "filter_theatres":  body.get("filter_theatres") or [],
         "filter_dates":     body.get("filter_dates") or [],
@@ -283,7 +292,7 @@ def api_create_monitor():
 def api_update_monitor(mid: int):
     body = request.get_json(force=True, silent=True) or {}
     # If filters were updated, reset last_alert so next check sends a fresh status report
-    if any(k in body for k in ("filter_theatres", "filter_dates", "filter_time_from", "filter_time_to")):
+    if any(k in body for k in ("filter_theatres", "filter_dates", "filter_time_from", "filter_time_to", "language")):
         body["last_alert"] = None
     updated = db.update_monitor(mid, body)
     if not updated:
