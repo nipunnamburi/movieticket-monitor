@@ -19,15 +19,44 @@ window.addEventListener('DOMContentLoaded', () => {
   setInterval(loadMonitors, 30_000);
 });
 
-// ── Theatre autocomplete ───────────────────────────────────────────────────
+// ── Theatre presets & autocomplete ─────────────────────────────────────────
+const PRESET_THEATRES = [
+  "Asian Lakshmikala Cinepride: Moosapet",
+  "Miraj Cinemas: Cine Town, Miyapur",
+  "Mallikarjuna 70mm A/C DTS: Kukatpally",
+  "Bhramaramba 70MM A/C 4K Dolby: Kukatpally",
+  "Cinepolis: Lulu Mall, Hyderabad",
+];
+
+function addPresetTheatre(selectEl, mode) {
+  const val = selectEl.value;
+  if (!val) return;
+  if (mode === 'add') {
+    if (!state.filters.theatres.includes(val)) {
+      state.filters.theatres.push(val);
+      renderTags('theatreTags', state.filters.theatres, 'theatre', removeFilter);
+      updateFilterBadge();
+    }
+  } else if (mode === 'edit') {
+    if (!state.editFilters.theatres.includes(val)) {
+      state.editFilters.theatres.push(val);
+      renderEditTags('editTheatreTags', state.editFilters.theatres, 'theatre');
+    }
+  }
+  selectEl.value = '';
+}
+
 // Fetches all known theatre names from every monitor's snapshot
 // and populates the <datalist> for the Add form.
 async function loadTheatreSuggestions() {
   try {
     const res      = await api('GET', '/api/theatres');
     const theatres = await res.json();
-    populateDatalist('theatreSuggestions', theatres);
-  } catch { /* silent — autocomplete is a nice-to-have */ }
+    const all = Array.from(new Set([...PRESET_THEATRES, ...theatres]));
+    populateDatalist('theatreSuggestions', all);
+  } catch {
+    populateDatalist('theatreSuggestions', PRESET_THEATRES);
+  }
 }
 
 // Fetches theatre names from a specific monitor's snapshot
@@ -36,8 +65,11 @@ async function loadEditTheatreSuggestions(monitorId) {
   try {
     const res      = await api('GET', `/api/monitors/${monitorId}/theatres`);
     const theatres = await res.json();
-    populateDatalist('editTheatreSuggestions', theatres);
-  } catch { /* silent */ }
+    const all = Array.from(new Set([...PRESET_THEATRES, ...theatres]));
+    populateDatalist('editTheatreSuggestions', all);
+  } catch {
+    populateDatalist('editTheatreSuggestions', PRESET_THEATRES);
+  }
 }
 
 function populateDatalist(datalistId, options) {
