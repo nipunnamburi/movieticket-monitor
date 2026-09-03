@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 """
-scraper.py — Enhanced Playwright-based BookMyShow scraper.
+scraper.py — BookMyShow scraper using BMS's own internal JSON API.
 
-Scrapes shows grouped by date → theatre → showtime → status.
+Instead of fragile DOM parsing, we intercept the XHR request that BMS's own
+frontend makes to populate the showtime grid. This gives us perfect structured
+data: venue name → showtime → availability status.
+
 Snapshot structure:
   {
-    "Fri, 01 Sep": {
-      "PVR Forum Sujana": {
+    "Wed, 03 Sep": {
+      "PVR: Forum Sujana Mall": {
         "10:30 AM": "available",
         "01:15 PM": "fast-filling"
       }
@@ -16,72 +19,14 @@ Snapshot structure:
 """
 
 import asyncio
-import hashlib
 import logging
 import re
+from datetime import datetime
 from typing import Any
 
 from playwright.async_api import async_playwright, Page, TimeoutError as PWTimeout
 
 logger = logging.getLogger(__name__)
-
-# ── Selectors (BMS uses dynamic/obfuscated class names; try many patterns) ────
-# These are tried in order — first one that finds elements wins.
-
-_VENUE_SELECTORS = [
-    # 2024-2026 BMS patterns
-    "[class*='venueInfoWrapper']",
-    "[class*='venue-info']",
-    "[class*='venueName']",
-    "[class*='venue-name']",
-    "[class*='__venueName']",
-    "[class*='__venue-name']",
-    # Generic name patterns inside a card
-    "[class*='__name']",
-    ".__name",
-    "h3[class*='name']",
-    "[class*='cinema-name']",
-    "[class*='theater-name']",
-    # Fallback: any h3/h4 inside a showtime card
-    "[class*='show-card'] h3",
-    "[class*='showCard'] h3",
-    "[class*='venueBlock'] h3",
-]
-
-_SHOWTIME_SELECTORS = [
-    "[class*='showtime-button']",
-    "[class*='showTimeButton']",
-    "[class*='showtime']",
-    "[class*='show-time']",
-    "[class*='__time']",
-    "button[class*='time']",
-    "a[class*='time']",
-    "time",
-]
-
-_DATE_TAB_SELECTORS = [
-    # 2024-2026 BMS date tab patterns
-    "[class*='date-tab']",
-    "[class*='dateTab']",
-    "[class*='DateTabs'] li",
-    "[class*='date-tabs'] li",
-    "[class*='date-selector'] li",
-    "[class*='dateSelector'] li",
-    "[class*='BookShowDate']",
-    "[class*='dateCard']",
-    ".slick-slide [class*='date']",
-    "[class*='slickSlide'] [class*='date']",
-    # Generic: li items inside anything with "date" in the class
-    "ul[class*='date'] li",
-    "[class*='calendar'] li",
-]
-
-_DATE_CONTAINER_SELECTORS = [
-    "[class*='date-selector']",
-    "[class*='dateSelector']",
-    "[class*='DateTabs']",
-    "[class*='date-tabs']",
-]
 
 # ── Browser settings ──────────────────────────────────────────────────────────
 
@@ -97,7 +42,7 @@ _VIEWPORT = {"width": 1366, "height": 768}
 _USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/125.0.0.0 Safari/537.36"
+    "Chrome/124.0.0.0 Safari/537.36"
 )
 
 _EXTRA_HEADERS = {
@@ -121,242 +66,232 @@ _STEALTH_SCRIPT = """
 """
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Status mapping from BMS styleId ──────────────────────────────────────────
 
-async def _try_selectors(page: Page, selectors: list[str]) -> list:
-    for sel in selectors:
-        try:
-            els = await page.query_selector_all(sel)
-            if els:
-                return els
-        except Exception:
-            continue
-    return []
-
-
-async def _dismiss_popups(page: Page) -> None:
-    for sel in [
-        "button[class*='close']",
-        "[class*='modal'] button[class*='cancel']",
-        "[class*='modal'] [aria-label='Close']",
-        "[class*='location'] button",
-        "[class*='overlay'] [class*='close']",
-    ]:
-        try:
-            btn = page.locator(sel).first
-            if await btn.is_visible(timeout=1200):
-                await btn.click()
-                await page.wait_for_timeout(400)
-        except Exception:
-            pass
-
-
-def _classify(class_str: str) -> str:
-    c = class_str.lower()
-    if "sold" in c or "housefull" in c or "blocked" in c:
+def _classify_style(style_id: str) -> str:
+    s = (style_id or "").lower()
+    if "grey" in s or "gray" in s or "sold" in s:
         return "sold-out"
-    if "fast" in c or "filling" in c:
+    if "orange" in s or "fast" in s or "filling" in s:
         return "fast-filling"
-    if "available" in c or "open" in c:
-        return "available"
-    return "available"  # default: assume bookable if found
+    return "available"  # green or unknown
 
 
-def _is_time(text: str) -> bool:
-    return bool(re.search(r"\d{1,2}:\d{2}", text))
+# ── Date normalisation ────────────────────────────────────────────────────────
+
+_MONTHS = {
+    "01": "Jan", "02": "Feb", "03": "Mar", "04": "Apr",
+    "05": "May", "06": "Jun", "07": "Jul", "08": "Aug",
+    "09": "Sep", "10": "Oct", "11": "Nov", "12": "Dec",
+}
+_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
-# ── Date tab parsing ──────────────────────────────────────────────────────────
-
-async def _get_date_tabs(page: Page) -> list[dict]:
-    """
-    Return list of {label, element} dicts for each visible date tab.
-    label example: "Fri, 01 Sep"
-    """
-    date_els = await _try_selectors(page, _DATE_TAB_SELECTORS)
-    tabs = []
-    seen = set()
-    for el in date_els:
-        text = ((await el.text_content()) or "").strip()
-        text = re.sub(r"\s+", " ", text)
-        # Filter: must look like a date (contains a digit + month-like word or day)
-        if not text or len(text) < 3 or len(text) > 30:
-            continue
-        if not re.search(r"\d", text):
-            continue
-        if text in seen:
-            continue
-        seen.add(text)
-        tabs.append({"label": text, "el": el})
-    return tabs
-
-
-async def _parse_shows_from_text(page: Page) -> dict[str, dict[str, str]]:
-    """Text-based fallback parser for BookMyShow showtime pages."""
-    shows: dict[str, dict[str, str]] = {}
+def _date_code_to_label(date_code: str) -> str:
+    """Convert '20260904' → 'Thu, 04 Sep'."""
     try:
-        body = await page.inner_text("body")
-        lines = [l.strip() for l in body.splitlines() if l.strip()]
-        current_venue = None
-        time_re = re.compile(r"^(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))$", re.IGNORECASE)
-        ignore = {
-            "non-cancellable", "cancellable", "available", "fast filling",
-            "sold out", "late night shows", "early morning shows",
-            "price range", "sort by", "special formats", "other filters",
-            "preferred time", "movies", "events", "plays", "sports"
-        }
-        for l in lines:
-            if time_re.match(l):
-                if current_venue:
-                    if current_venue not in shows:
-                        shows[current_venue] = {}
-                    m = re.match(r"^(\d{1,2}):(\d{2})\s*(AM|PM)$", l.upper())
-                    time_str = f"{int(m.group(1)):02d}:{m.group(2)} {m.group(3)}" if m else l.upper()
-                    shows[current_venue][time_str] = "available"
-            elif len(l) > 3 and (":" in l or any(k in l.lower() for k in ("pvr", "inox", "cinepolis", "cinemas", "multiplex", "mall"))):
-                if l.lower() not in ignore and not re.search(r"^\d{1,2}:\d{2}", l):
-                    current_venue = l
-    except Exception as exc:
-        logger.warning("Text parser fallback exception: %s", exc)
-    return shows
-
-
-# ── Show parsing for a single rendered date ───────────────────────────────────
-
-async def _parse_shows_on_page(page: Page) -> dict[str, dict[str, str]]:
-    """
-    Parse currently rendered theatre/showtime grid.
-    Returns: { theatre_name: { "HH:MM AM/PM": status } }
-    """
-    shows: dict[str, dict[str, str]] = {}
-
-    venue_els = await _try_selectors(page, _VENUE_SELECTORS)
-    if venue_els:
-        for venue_el in venue_els:
-            raw = (await venue_el.text_content()) or ""
-            name = raw.strip().splitlines()[0].strip()
-            if not name or len(name) > 120:
-                continue
-
-            try:
-                parent_handle = await venue_el.evaluate_handle(
-                    """el => {
-                        let p = el;
-                        for (let i = 0; i < 5; i++) {
-                            p = p.parentElement;
-                            if (!p) break;
-                            if (p.querySelectorAll('[class*="showtime"], [class*="show-time"], [class*="__time"], time').length > 0)
-                                return p;
-                        }
-                        return el.parentElement || el;
-                    }"""
-                )
-                parent = parent_handle.as_element()
-            except Exception:
-                parent = venue_el
-
-            st_els = []
-            for sel in _SHOWTIME_SELECTORS:
-                try:
-                    found = await (parent or venue_el).query_selector_all(sel)
-                    st_els.extend(found)
-                    if found:
-                        break
-                except Exception:
-                    continue
-
-            times: dict[str, str] = {}
-            for st_el in st_els:
-                text = ((await st_el.text_content()) or "").strip()
-                if not _is_time(text):
-                    continue
-                m = re.search(r"(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)", text)
-                if not m:
-                    continue
-                time_str = m.group(1).upper().strip()
-                class_attr = (await st_el.get_attribute("class")) or ""
-                status = _classify(class_attr)
-                times[time_str] = status
-
-            if times:
-                shows[name] = times
-
-    # Fallback to robust text-based parser if DOM selector query found no venues
-    if not shows:
-        logger.info("  DOM selector parser returned 0 shows — running text-based fallback parser...")
-        shows = await _parse_shows_from_text(page)
-
-    return shows
-
-
-# ── Full page scrape ──────────────────────────────────────────────────────────
-
-async def _scrape_page(page: Page, max_dates: int = 4) -> dict[str, Any]:
-    """
-    Returns snapshot keyed by date label:
-    { "Fri, 01 Sep": { theatre: { time: status } } }
-    Falls back to { "_page_hash": hash } if DOM parsing fails entirely.
-    """
-    await _dismiss_popups(page)
-
-    # If on movie details page, click "Book tickets" to open the showtimes page
-    try:
-        book_btn = page.locator('button:has-text("Book tickets"), a:has-text("Book tickets")').first
-        if await book_btn.is_visible(timeout=1500):
-            logger.info("  Clicking 'Book tickets' button...")
-            await book_btn.click()
-            await page.wait_for_timeout(3000)
-            await _dismiss_popups(page)
+        dt = datetime.strptime(date_code, "%Y%m%d")
+        day_name = _DAYS[dt.weekday()]
+        return f"{day_name}, {dt.day:02d} {_MONTHS[f'{dt.month:02d}']}"
     except Exception:
-        pass
+        return date_code
 
-    date_tabs = await _get_date_tabs(page)
-    logger.info("  Found %d date tab(s)", len(date_tabs))
 
-    snapshot: dict[str, Any] = {}
+# ── BMS API URL construction ──────────────────────────────────────────────────
 
-    if not date_tabs:
-        # No date tabs — just parse whatever is on the page
-        shows = await _parse_shows_on_page(page)
-        if shows:
-            snapshot["_default"] = shows
-        else:
-            body = await page.inner_text("body")
-            snapshot["_page_hash"] = {"value": hashlib.sha256(body.encode()).hexdigest()[:16]}
-        return snapshot
+def _build_buytickets_url(base_url: str, date_code: str | None = None) -> str:
+    """
+    Convert movie page URL to buytickets URL for a given date.
+    e.g. https://in.bookmyshow.com/movies/hyderabad/bethlehem.../ET00515244
+      → https://in.bookmyshow.com/movies/hyderabad/bethlehem.../buytickets/ET00515244/20260904
+    """
+    # Already a buytickets URL — extract the date from it
+    if "/buytickets/" in base_url:
+        # Strip query params, normalise
+        clean = base_url.split("?")[0].rstrip("/")
+        # Try to reuse the date already in the URL if not overriding
+        m = re.search(r"/buytickets/([^/]+)/(\d{8})", clean)
+        if m and date_code is None:
+            return clean
+        elif m and date_code:
+            return clean.rsplit("/", 1)[0] + "/" + date_code
+        return clean
 
-    for tab in date_tabs[:max_dates]:
-        label = tab["label"]
-        try:
-            await tab["el"].click()
-            await page.wait_for_timeout(1800)
-        except Exception as exc:
-            logger.warning("Could not click date tab '%s': %s", label, exc)
-            continue
+    # Movie detail page — convert to buytickets URL
+    m = re.search(r"/(ET\d{8})", base_url)
+    if not m:
+        return base_url
+    event_code = m.group(1)
+    base = base_url.split("?")[0].rstrip("/")
+    if date_code:
+        return f"{base}/buytickets/{event_code}/{date_code}"
+    return f"{base}/buytickets/{event_code}"
 
-        shows = await _parse_shows_on_page(page)
-        if shows:
-            snapshot[label] = shows
-        logger.info("  Date '%s' → %d theatre(s)", label, len(shows))
 
-    if not snapshot:
-        body = await page.inner_text("body")
-        snapshot["_page_hash"] = {"value": hashlib.sha256(body.encode()).hexdigest()[:16]}
+def _extract_region_and_event(url: str) -> tuple[str, str]:
+    """Extract region code and event code from BMS URL."""
+    event_m = re.search(r"/(ET\d{8})", url)
+    event_code = event_m.group(1) if event_m else ""
 
-    return snapshot
+    city_m = re.search(r"in\.bookmyshow\.com/movies/([^/]+)", url)
+    city = city_m.group(1) if city_m else ""
+
+    # City slug → region code mapping for major cities
+    _REGION_MAP = {
+        "mumbai": "MUMBAI", "hyderabad": "HYD", "secunderabad": "HYD",
+        "bengaluru": "BANG", "bangalore": "BANG", "delhi": "NCR",
+        "ncr": "NCR", "chennai": "CHEN", "kolkata": "KOLK",
+        "pune": "PUNE", "ahmedabad": "AHED",
+    }
+    region = _REGION_MAP.get(city.lower(), city.upper()[:4])
+    return region, event_code
+
+
+# ── API call interceptor ──────────────────────────────────────────────────────
+
+async def _intercept_api(page: Page, url: str, date_codes: list[str]) -> dict[str, Any]:
+    """
+    Load the BMS buytickets page and intercept the JSON API response.
+    Returns: { "date_label": { venue: { time: status } } }
+    """
+    region, event_code = _extract_region_and_event(url)
+    all_api_responses: dict[str, Any] = {}  # date_code → JSON response
+
+    # Register response interceptor BEFORE navigation
+    async def on_response(response):
+        if "showtimes-by-event" in response.url and "primary-dynamic" in response.url:
+            dc_match = re.search(r"dateCode=(\d{8})", response.url)
+            dc = dc_match.group(1) if dc_match else "unknown"
+            try:
+                data = await response.json()
+                all_api_responses[dc] = data
+                logger.info("  ✅ Captured API for dateCode=%s (%d venues)", dc,
+                            sum(1 for w in data.get("data", {}).get("showtimeWidgets", [])
+                                if w.get("type") == "groupList"
+                                for g in w.get("data", [])
+                                for i in g.get("data", [])
+                                if i.get("type") == "venue-card"))
+            except Exception as exc:
+                logger.warning("  API response parse error: %s", exc)
+
+    page.on("response", on_response)
+
+    # Navigate to first date to get the API call
+    first_date = date_codes[0] if date_codes else None
+    nav_url = _build_buytickets_url(url, first_date)
+    logger.info("  Loading: %s", nav_url)
+
+    try:
+        await page.goto(nav_url, wait_until="domcontentloaded", timeout=40_000)
+    except PWTimeout:
+        logger.warning("  DOM load timeout — continuing")
+
+    await page.wait_for_timeout(4000)
+
+    # If multiple dates needed and not already captured, navigate to each
+    for dc in date_codes[1:]:
+        if dc not in all_api_responses:
+            try:
+                nav2 = _build_buytickets_url(url, dc)
+                await page.goto(nav2, wait_until="domcontentloaded", timeout=30_000)
+                await page.wait_for_timeout(3000)
+            except Exception:
+                pass
+
+    return all_api_responses
+
+
+# ── Parse API response into snapshot dict ────────────────────────────────────
+
+def _parse_api_response(api_response: dict) -> dict[str, dict[str, str]]:
+    """
+    Parse one BMS showtimes API response into { venue: { time: status } }.
+    """
+    shows: dict[str, dict[str, str]] = {}
+    try:
+        widgets = api_response.get("data", {}).get("showtimeWidgets", [])
+        for widget in widgets:
+            if widget.get("type") != "groupList":
+                continue
+            for group in widget.get("data", []):
+                for item in group.get("data", []):
+                    if item.get("type") != "venue-card":
+                        continue
+                    venue_name = (item.get("additionalData") or {}).get("venueName", "")
+                    if not venue_name:
+                        continue
+                    times: dict[str, str] = {}
+                    for section in item.get("showtimesSections", []):
+                        for st in section.get("showtimes", []):
+                            title = st.get("title", "").strip()
+                            if not title or not re.search(r"\d{1,2}:\d{2}", title):
+                                continue
+                            # Normalise to "HH:MM AM/PM"
+                            m = re.match(r"(\d{1,2}):(\d{2})\s*(AM|PM)", title, re.IGNORECASE)
+                            if m:
+                                title = f"{int(m.group(1)):02d}:{m.group(2)} {m.group(3).upper()}"
+                            status = _classify_style(st.get("styleId", ""))
+                            times[title] = status
+                    if times:
+                        shows[venue_name] = times
+    except Exception as exc:
+        logger.warning("  API parse error: %s", exc)
+    return shows
+
+
+# ── Determine date codes to check ────────────────────────────────────────────
+
+def _get_date_codes(url: str, filter_dates: list[str]) -> list[str]:
+    """
+    Return YYYYMMDD date codes to query. 
+    - If URL already has a date, use that.
+    - If user specified filter dates, convert them.
+    - Otherwise, use today + next 3 days.
+    """
+    # Extract date from buytickets URL
+    m = re.search(r"/buytickets/ET\d{8}/(\d{8})", url)
+    if m:
+        return [m.group(1)]
+
+    if filter_dates:
+        codes = []
+        for fd in filter_dates:
+            # Try "YYYYMMDD" format first
+            if re.match(r"^\d{8}$", fd):
+                codes.append(fd)
+                continue
+            # Try "DD/MM/YYYY" or "YYYY-MM-DD"
+            for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d %b %Y", "%d %B %Y"):
+                try:
+                    dt = datetime.strptime(fd, fmt)
+                    codes.append(dt.strftime("%Y%m%d"))
+                    break
+                except ValueError:
+                    continue
+        if codes:
+            return codes
+
+    # Default: today + next 3 days
+    from datetime import date, timedelta
+    today = date.today()
+    return [(today + timedelta(days=i)).strftime("%Y%m%d") for i in range(4)]
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-async def fetch_snapshot(target: dict[str, Any], max_dates: int = 4) -> dict[str, Any]:
+async def fetch_snapshot(target: dict[str, Any]) -> dict[str, Any]:
     url   = target["url"]
     name  = target.get("name", url)
     city  = target.get("city", "")
+    filter_dates = target.get("filter_dates") or []
 
     result: dict[str, Any] = {
         "name": name, "url": url, "city": city,
         "shows": {}, "error": None,
     }
+
+    date_codes = _get_date_codes(url, filter_dates)
+    logger.info("Scraping %s | dates: %s", name, date_codes)
 
     try:
         async with async_playwright() as pw:
@@ -370,22 +305,25 @@ async def fetch_snapshot(target: dict[str, Any], max_dates: int = 4) -> dict[str
             await ctx.add_init_script(_STEALTH_SCRIPT)
             page = await ctx.new_page()
 
-            logger.info("Loading %s", url)
-            try:
-                await page.goto(url, wait_until="networkidle", timeout=50_000)
-            except PWTimeout:
-                logger.warning("networkidle timeout — continuing with partial load")
+            api_responses = await _intercept_api(page, url, date_codes)
+            await browser.close()
 
-            await page.wait_for_timeout(2500)
-
-            body = (await page.inner_text("body")).lower()
-            if any(kw in body for kw in ("captcha", "access denied", "403 forbidden", "cf-error")):
-                result["error"] = "Bot-detection page encountered — will retry next cycle"
-                await browser.close()
+            if not api_responses:
+                result["error"] = "BMS API call not captured — page may have failed to load"
                 return result
 
-            result["shows"] = await _scrape_page(page, max_dates=max_dates)
-            await browser.close()
+            # Build snapshot: { "Thu, 04 Sep": { venue: { time: status } } }
+            snapshot: dict[str, Any] = {}
+            for dc, resp in api_responses.items():
+                date_label = _date_code_to_label(dc)
+                shows = _parse_api_response(resp)
+                if shows:
+                    snapshot[date_label] = shows
+                    logger.info("  %s → %d venue(s)", date_label, len(shows))
+                else:
+                    logger.warning("  %s → 0 venues parsed from API", date_label)
+
+            result["shows"] = snapshot
 
     except Exception as exc:
         logger.exception("Scraper error for %s", url)
@@ -394,9 +332,9 @@ async def fetch_snapshot(target: dict[str, Any], max_dates: int = 4) -> dict[str
     return result
 
 
-def scrape(target: dict[str, Any], max_dates: int = 4) -> dict[str, Any]:
+def scrape(target: dict[str, Any]) -> dict[str, Any]:
     """Synchronous wrapper — safe to call from Flask/APScheduler threads."""
-    return asyncio.run(fetch_snapshot(target, max_dates=max_dates))
+    return asyncio.run(fetch_snapshot(target))
 
 
 # ── Filter application ────────────────────────────────────────────────────────
@@ -416,13 +354,41 @@ def apply_filters(
 
     for date_label, theatres in snapshot.items():
         if date_label == "_page_hash":
-            result[date_label] = theatres
+            # Legacy hash-mode snapshot — skip, we don't use hashes anymore
             continue
 
-        # Date filter
+        # Date filter — flexible matching: "04 Sep", "Thu, 04 Sep", "20260904" all match
         if filter_dates:
-            # Match if any filter_date appears in the label (partial, case-insensitive)
-            if not any(fd.lower() in date_label.lower() for fd in filter_dates):
+            matched = False
+            for fd in filter_dates:
+                fd_clean = fd.strip().lower()
+                # Try to convert filter date to a short date label for comparison
+                # e.g. "20260904" → "04 Sep"
+                if re.match(r"^\d{8}$", fd_clean):
+                    try:
+                        dt = datetime.strptime(fd_clean, "%Y%m%d")
+                        fd_label = f"{dt.day:02d} {_MONTHS[f'{dt.month:02d}']}"
+                        if fd_label.lower() in date_label.lower():
+                            matched = True
+                            break
+                    except Exception:
+                        pass
+                # Also try dd/mm/yyyy
+                for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+                    try:
+                        dt = datetime.strptime(fd_clean, fmt)
+                        fd_label = f"{dt.day:02d} {_MONTHS[f'{dt.month:02d}']}"
+                        if fd_label.lower() in date_label.lower():
+                            matched = True
+                            break
+                    except ValueError:
+                        continue
+                # Plain substring match as last resort
+                if fd_clean in date_label.lower() or date_label.lower() in fd_clean:
+                    matched = True
+                if matched:
+                    break
+            if not matched:
                 continue
 
         if not isinstance(theatres, dict):
@@ -430,9 +396,9 @@ def apply_filters(
 
         filtered_theatres: dict[str, Any] = {}
         for theatre, times in theatres.items():
-            # Theatre filter
+            # Theatre filter — case-insensitive substring
             if filter_theatres:
-                if not any(ft.lower() in theatre.lower() for ft in filter_theatres):
+                if not any(ft.strip().lower() in theatre.lower() for ft in filter_theatres):
                     continue
 
             if not isinstance(times, dict):
@@ -454,7 +420,6 @@ def apply_filters(
 
 
 def _parse_time_to_minutes(time_str: str) -> int | None:
-    """Convert "06:30 PM" or "18:30" to minutes since midnight."""
     m = re.match(r"(\d{1,2}):(\d{2})\s*(AM|PM)?", time_str.strip(), re.IGNORECASE)
     if not m:
         return None
@@ -468,12 +433,11 @@ def _parse_time_to_minutes(time_str: str) -> int | None:
 
 
 def _time_in_range(time_str: str, from_str: str, to_str: str) -> bool:
-    """Return True if time_str falls within [from_str, to_str] (inclusive). Empty = no bound."""
     if not from_str and not to_str:
         return True
     t = _parse_time_to_minutes(time_str)
     if t is None:
-        return True  # can't parse → don't filter out
+        return True
     if from_str:
         f = _parse_time_to_minutes(from_str)
         if f is not None and t < f:
