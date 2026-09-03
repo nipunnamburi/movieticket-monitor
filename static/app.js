@@ -194,6 +194,51 @@ async function autoDetect(url) {
   } catch { /* silent */ }
 }
 
+function togglePresetChip(val, btn) {
+  const idx = state.filters.theatres.indexOf(val);
+  if (idx >= 0) {
+    state.filters.theatres.splice(idx, 1);
+  } else {
+    state.filters.theatres.push(val);
+  }
+  renderTags('theatreTags', state.filters.theatres, 'theatre', removeFilter);
+  syncPresetChips();
+  updateFilterBadge();
+}
+
+function syncPresetChips() {
+  document.querySelectorAll('.preset-chip').forEach(btn => {
+    const text = btn.textContent || '';
+    const isSelected = state.filters.theatres.some(t => {
+      if (text.includes('Moosapet')) return t.includes('Moosapet');
+      if (text.includes('Miyapur')) return t.includes('Miyapur');
+      if (text.includes('Mallikarjuna Kukatpally')) return t.includes('Mallikarjuna');
+      if (text.includes('Bhramaramba Kukatpally')) return t.includes('Bhramaramba');
+      if (text.includes('Lulu Mall')) return t.includes('Lulu Mall');
+      return false;
+    });
+    if (isSelected) {
+      btn.className = 'preset-chip chip bg-red-950/80 hover:bg-red-900 text-red-300 border border-red-700/80 py-1 px-2.5 text-xs transition active:scale-95 font-medium';
+    } else {
+      btn.className = 'preset-chip chip bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 border border-zinc-700/60 py-1 px-2.5 text-xs transition active:scale-95';
+    }
+  });
+}
+
+function setTimePreset(from, to, btn) {
+  document.getElementById('timeFrom').value = from;
+  document.getElementById('timeTo').value   = to;
+  document.querySelectorAll('.time-preset-btn').forEach(b => {
+    b.classList.remove('bg-bms/20', 'border-bms/60', 'text-bms', 'font-semibold');
+    b.classList.add('bg-zinc-800/80', 'border-zinc-700/60', 'text-zinc-300');
+  });
+  if (btn) {
+    btn.classList.remove('bg-zinc-800/80', 'border-zinc-700/60', 'text-zinc-300');
+    btn.classList.add('bg-bms/20', 'border-bms/60', 'text-bms', 'font-semibold');
+  }
+  updateFilterBadge();
+}
+
 // ── Filter management ──────────────────────────────────────────────────────
 function toggleFilters() {
   const panel   = document.getElementById('filtersPanel');
@@ -216,6 +261,7 @@ function addFilter(type) {
     state.filters.dates.push(v); inp.value = '';
     renderTags('dateTags', state.filters.dates, 'date', removeFilter);
   }
+  syncPresetChips();
   updateFilterBadge();
 }
 
@@ -225,6 +271,7 @@ function removeFilter(type, val) {
   renderTags(type === 'theatre' ? 'theatreTags' : 'dateTags',
              type === 'theatre' ? state.filters.theatres : state.filters.dates,
              type, removeFilter);
+  syncPresetChips();
   updateFilterBadge();
 }
 
@@ -315,6 +362,11 @@ function resetForm() {
   document.getElementById('timeFrom').value = '';
   document.getElementById('timeTo').value   = '';
   document.getElementById('filterBadge').classList.add('hidden');
+  syncPresetChips();
+  document.querySelectorAll('.time-preset-btn').forEach(b => {
+    b.classList.remove('bg-bms/20', 'border-bms/60', 'text-bms', 'font-semibold');
+    b.classList.add('bg-zinc-800/80', 'border-zinc-700/60', 'text-zinc-300');
+  });
 }
 
 // ── Load / render monitors ─────────────────────────────────────────────────
@@ -330,12 +382,35 @@ function renderMonitors(monitors) {
   const container = document.getElementById('monitorsContainer');
   document.getElementById('monitorCount').textContent = monitors.length;
 
+  const totalAlerts = monitors.reduce((sum, m) => sum + (m.alert_count || 0), 0);
+  const activeCount = monitors.filter(m => m.status === 'active').length;
+
+  const statsEl = document.getElementById('statsBanner');
+  if (statsEl) {
+    statsEl.innerHTML = `
+      <div class="grid grid-cols-3 gap-2 mb-4 bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-2.5 text-center">
+        <div>
+          <div class="text-[10px] text-zinc-500 font-medium uppercase tracking-wider">Monitors</div>
+          <div class="text-sm font-bold text-zinc-200">${monitors.length} <span class="text-xs text-green-400 font-normal">(${activeCount} active)</span></div>
+        </div>
+        <div>
+          <div class="text-[10px] text-zinc-500 font-medium uppercase tracking-wider">Alerts Sent</div>
+          <div class="text-sm font-bold text-zinc-200">${totalAlerts} 🔔</div>
+        </div>
+        <div>
+          <div class="text-[10px] text-zinc-500 font-medium uppercase tracking-wider">Check Freq</div>
+          <div class="text-sm font-bold text-zinc-200">15 min</div>
+        </div>
+      </div>
+    `;
+  }
+
   if (!monitors.length) {
     container.innerHTML = `
-      <div class="text-center py-20 text-zinc-700">
-        <div class="text-5xl mb-4 opacity-40">🎬</div>
-        <div class="text-sm font-medium">No monitors yet</div>
-        <div class="text-xs mt-1 text-zinc-600">Tap <strong>Add</strong> to get started</div>
+      <div class="text-center py-16 text-zinc-700 bg-zinc-900/30 border border-zinc-800/60 rounded-2xl p-6">
+        <div class="text-5xl mb-3 opacity-40">🎬</div>
+        <div class="text-sm font-medium text-zinc-400">No monitors configured</div>
+        <div class="text-xs mt-1 text-zinc-500">Add a BookMyShow movie link to start tracking ticket openings!</div>
       </div>`;
     return;
   }
@@ -346,25 +421,28 @@ function renderMonitors(monitors) {
 
 function makeCard(m) {
   const card = document.createElement('div');
-  card.className = 'bg-zinc-900 border border-zinc-800 rounded-2xl p-4 mb-3 fade-in';
+  card.className = 'bg-zinc-900 border border-zinc-800/90 rounded-2xl p-4 sm:p-4.5 mb-3.5 shadow-lg transition hover:border-zinc-700/80 fade-in';
 
   const S = {
-    active: { dot: 'bg-green-500',  label: 'Active',  text: 'text-green-400' },
-    paused: { dot: 'bg-yellow-500', label: 'Paused',  text: 'text-yellow-400' },
-    error:  { dot: 'bg-red-500',    label: 'Error',   text: 'text-red-400' },
+    active: { dot: 'bg-green-500 shadow-sm shadow-green-500/50', label: 'Active', text: 'text-green-400' },
+    paused: { dot: 'bg-yellow-500 shadow-sm shadow-yellow-500/50', label: 'Paused', text: 'text-yellow-400' },
+    error:  { dot: 'bg-red-500 shadow-sm shadow-red-500/50',    label: 'Error',   text: 'text-red-400' },
   }[m.status] || { dot: 'bg-zinc-500', label: m.status, text: 'text-zinc-400' };
+
+  // Check if monitor is in pre-booking mode (snapshot has no showtimes yet)
+  const isPreBooking = m.status === 'active' && (!m.snapshot || Object.keys(m.snapshot).length === 0 || Object.values(m.snapshot).every(v => typeof v !== 'object' || Object.keys(v).length === 0));
 
   const filters = [];
   if (m.language)
-    filters.push(`<span class="chip bg-zinc-800 text-zinc-400 text-xs">🗣️ ${esc(m.language)}</span>`);
+    filters.push(`<span class="chip bg-red-950/40 text-red-300 border border-red-900/50 text-[11px] font-medium">🗣️ ${esc(m.language)}</span>`);
   if (m.filter_theatres?.length)
-    filters.push(`<span class="chip bg-zinc-800 text-zinc-500 text-xs">🏢 ${esc(m.filter_theatres.join(', '))}</span>`);
+    filters.push(`<span class="chip bg-zinc-800 text-zinc-300 border border-zinc-700/60 text-[11px]">🏢 ${esc(m.filter_theatres.join(', '))}</span>`);
   if (m.filter_dates?.length)
-    filters.push(`<span class="chip bg-zinc-800 text-zinc-500 text-xs">📅 ${esc(m.filter_dates.join(', '))}</span>`);
+    filters.push(`<span class="chip bg-zinc-800 text-zinc-300 border border-zinc-700/60 text-[11px]">📅 ${esc(m.filter_dates.join(', '))}</span>`);
   if (m.filter_time_from || m.filter_time_to)
-    filters.push(`<span class="chip bg-zinc-800 text-zinc-500 text-xs">⏰ ${esc(m.filter_time_from||'any')}–${esc(m.filter_time_to||'any')}</span>`);
+    filters.push(`<span class="chip bg-zinc-800 text-zinc-300 border border-zinc-700/60 text-[11px]">⏰ ${esc(m.filter_time_from||'any')}–${esc(m.filter_time_to||'any')}</span>`);
   if (!filters.length)
-    filters.push('<span class="chip bg-zinc-800/50 text-zinc-700 text-xs">All shows</span>');
+    filters.push('<span class="chip bg-zinc-800/50 text-zinc-500 text-[11px]">All shows & venues</span>');
 
   const checked  = m.last_checked ? timeAgo(m.last_checked) : 'Never';
   const nextRun  = m.next_run ? timeFromNow(m.next_run) : '—';
@@ -373,49 +451,62 @@ function makeCard(m) {
     <!-- Top row -->
     <div class="flex items-start justify-between gap-2 mb-2">
       <div class="min-w-0">
-        <div class="font-semibold text-sm truncate text-zinc-100">${esc(m.name)}</div>
-        <div class="text-xs text-zinc-600 mt-0.5">${esc(m.city||'—')}${m.language ? ' · ' + esc(m.language) : ''} · every ${m.interval_minutes} min</div>
+        <div class="font-bold text-sm sm:text-base truncate text-zinc-100 flex items-center gap-2">
+          <span>${esc(m.name)}</span>
+        </div>
+        <div class="text-xs text-zinc-500 mt-0.5 flex items-center gap-2 flex-wrap">
+          <span>📍 ${esc(m.city||'—')}</span>
+          <span>•</span>
+          <span>⏱ Every ${m.interval_minutes} min</span>
+        </div>
       </div>
-      <div class="flex items-center gap-1.5 shrink-0 mt-0.5">
-        <span class="w-2 h-2 rounded-full ${S.dot} shrink-0"></span>
-        <span class="text-xs font-medium ${S.text}">${S.label}</span>
+      <div class="flex flex-col items-end gap-1 shrink-0">
+        <div class="flex items-center gap-1.5 bg-zinc-800/80 border border-zinc-700/60 rounded-full px-2.5 py-1">
+          <span class="w-2 h-2 rounded-full ${S.dot} shrink-0"></span>
+          <span class="text-[11px] font-semibold ${S.text}">${S.label}</span>
+        </div>
+        ${isPreBooking ? `<span class="text-[10px] text-blue-400 bg-blue-950/50 border border-blue-900/50 rounded-md px-1.5 py-0.5 font-medium">⏳ Pre-Booking Mode</span>` : ''}
       </div>
     </div>
 
     <!-- Filters -->
-    <div class="flex flex-wrap gap-1.5 mb-2">${filters.join('')}</div>
+    <div class="flex flex-wrap gap-1.5 mb-3">${filters.join('')}</div>
 
-    <!-- Error -->
-    ${m.last_error ? `<div class="text-xs text-red-400 bg-red-950/30 rounded-lg px-3 py-2 mb-2 leading-snug">⚠ ${esc(m.last_error)}</div>` : ''}
+    <!-- Error message if any -->
+    ${m.last_error ? `<div class="text-xs text-red-400 bg-red-950/40 border border-red-900/60 rounded-xl px-3 py-2 mb-3 leading-snug flex items-center gap-2"><span>⚠</span> <span>${esc(m.last_error)}</span></div>` : ''}
 
-    <!-- Stats -->
-    <div class="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-zinc-600 mb-3">
-      <span>Checked: <span class="text-zinc-400">${checked}</span></span>
-      <span>Next: <span class="text-zinc-400">${nextRun}</span></span>
-      <span>Alerts: <span class="text-zinc-400">${m.alert_count||0}</span></span>
+    <!-- Stats summary bar -->
+    <div class="grid grid-cols-3 gap-2 bg-zinc-950/60 border border-zinc-800/60 rounded-xl px-3 py-2 text-xs text-zinc-500 mb-3">
+      <div>Checked: <span class="text-zinc-300 font-medium block sm:inline">${checked}</span></div>
+      <div>Next Check: <span class="text-zinc-300 font-medium block sm:inline">${nextRun}</span></div>
+      <div>Alerts Sent: <span class="text-zinc-300 font-medium block sm:inline">${m.alert_count||0} 🔔</span></div>
     </div>
 
-    <!-- Actions — two rows on very small screens -->
-    <div class="flex flex-wrap gap-2">
-      <button onclick="checkNow(${m.id})"
-        class="text-xs bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 text-zinc-300 px-3 py-2 rounded-lg transition">
+    <!-- Quick Actions Bar -->
+    <div class="flex flex-wrap items-center gap-2 pt-1 border-t border-zinc-800/60">
+      <a href="${esc(m.url)}" target="_blank"
+        class="text-xs bg-bms/10 hover:bg-bms/20 border border-bms/30 text-bms font-semibold px-3 py-2 rounded-xl transition flex items-center gap-1 active:scale-95">
+        🎟 Open BMS ↗
+      </a>
+      <button id="checkBtn-${m.id}" onclick="checkNow(${m.id})"
+        class="text-xs bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 text-zinc-200 px-3 py-2 rounded-xl transition flex items-center gap-1">
         ↻ Check
       </button>
       <button onclick="togglePause(${m.id},'${m.status}')"
-        class="text-xs bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 text-zinc-300 px-3 py-2 rounded-lg transition">
+        class="text-xs bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 text-zinc-300 px-3 py-2 rounded-xl transition">
         ${m.status === 'active' ? '⏸ Pause' : '▶ Resume'}
       </button>
       <button onclick="openEdit(${m.id})"
-        class="text-xs bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 text-zinc-300 px-3 py-2 rounded-lg transition">
+        class="text-xs bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 text-zinc-300 px-3 py-2 rounded-xl transition">
         ✏ Edit
       </button>
       ${(m.alert_count||0) > 0 ? `
       <button onclick="openHistory(${m.id},'${esc(m.name)}')"
-        class="text-xs bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 text-zinc-300 px-3 py-2 rounded-lg transition">
+        class="text-xs bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 text-zinc-300 px-3 py-2 rounded-xl transition">
         📋 History
       </button>` : ''}
       <button onclick="deleteMonitor(${m.id},'${esc(m.name)}')"
-        class="text-xs bg-zinc-800 hover:bg-red-950/50 active:bg-red-950 text-zinc-500 hover:text-red-400 px-3 py-2 rounded-lg transition ml-auto">
+        class="text-xs bg-zinc-800/80 hover:bg-red-950/60 active:bg-red-950 text-zinc-500 hover:text-red-400 border border-transparent hover:border-red-900/50 px-2.5 py-2 rounded-xl transition ml-auto">
         🗑
       </button>
     </div>
@@ -425,9 +516,19 @@ function makeCard(m) {
 
 // ── Monitor actions ────────────────────────────────────────────────────────
 async function checkNow(id) {
-  toast('Check triggered…');
-  await api('POST', `/api/monitors/${id}/check`);
-  setTimeout(loadMonitors, 5000);
+  const btn = document.getElementById(`checkBtn-${id}`);
+  if (btn) { btn.innerHTML = '⟳ Checking…'; btn.disabled = true; }
+  toast('Check triggered via GitHub Actions / local runner…');
+  try {
+    await api('POST', `/api/monitors/${id}/check`);
+  } catch {
+    toast('Check failed', 'error');
+  } finally {
+    setTimeout(() => {
+      if (btn) { btn.innerHTML = '↻ Check'; btn.disabled = false; }
+      loadMonitors();
+    }, 4000);
+  }
 }
 
 async function togglePause(id, status) {

@@ -158,13 +158,39 @@
 
             <!-- Theatre -->
             <div>
-              <label class="block text-xs text-zinc-500 mb-1 font-medium">🏢 Theatre(s)</label>
-              <p class="text-xs text-zinc-700 mb-2">Only alert for these venues. Leave empty for all.</p>
+              <label class="block text-xs text-zinc-400 mb-1.5 font-semibold flex items-center justify-between">
+                <span>🏢 Theatre Filter</span>
+                <span class="text-[10px] text-zinc-500 font-normal">Tap to select</span>
+              </label>
 
-              <!-- Frequent Theatre Dropdown -->
+              <!-- Quick Frequent Theatre Chips -->
+              <div class="flex flex-wrap gap-1.5 mb-2.5">
+                <button type="button" onclick="togglePresetChip('Asian Lakshmikala Cinepride: Moosapet', this)"
+                  class="preset-chip chip bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 border border-zinc-700/60 py-1 px-2.5 text-xs transition active:scale-95">
+                  Asian Moosapet
+                </button>
+                <button type="button" onclick="togglePresetChip('Miraj Cinemas: Cine Town, Miyapur', this)"
+                  class="preset-chip chip bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 border border-zinc-700/60 py-1 px-2.5 text-xs transition active:scale-95">
+                  Miraj Miyapur
+                </button>
+                <button type="button" onclick="togglePresetChip('Mallikarjuna 70mm A/C DTS: Kukatpally', this)"
+                  class="preset-chip chip bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 border border-zinc-700/60 py-1 px-2.5 text-xs transition active:scale-95">
+                  Mallikarjuna Kukatpally
+                </button>
+                <button type="button" onclick="togglePresetChip('Bhramaramba 70MM A/C 4K Dolby: Kukatpally', this)"
+                  class="preset-chip chip bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 border border-zinc-700/60 py-1 px-2.5 text-xs transition active:scale-95">
+                  Bhramaramba Kukatpally
+                </button>
+                <button type="button" onclick="togglePresetChip('Cinepolis: Lulu Mall, Hyderabad', this)"
+                  class="preset-chip chip bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 border border-zinc-700/60 py-1 px-2.5 text-xs transition active:scale-95">
+                  Cinepolis Lulu Mall
+                </button>
+              </div>
+
+              <!-- Frequent Theatre Dropdown Fallback -->
               <select id="frequentTheatreSelect" onchange="addPresetTheatre(this, 'add')"
-                class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-300 mb-2 focus:outline-none focus:border-bms/60 transition">
-                <option value="">-- Quick Select Frequent Theatre --</option>
+                class="w-full bg-zinc-800/90 border border-zinc-700/80 rounded-xl px-3 py-2 text-xs text-zinc-300 mb-2 focus:outline-none focus:border-bms/60 transition">
+                <option value="">-- Or Select from All Frequent Theatres --</option>
                 <option value="Asian Lakshmikala Cinepride: Moosapet">Asian Lakshmikala Cinepride: Moosapet</option>
                 <option value="Miraj Cinemas: Cine Town, Miyapur">Miraj Cinemas: Cine Town, Miyapur</option>
                 <option value="Mallikarjuna 70mm A/C DTS: Kukatpally">Mallikarjuna 70mm A/C DTS: Kukatpally</option>
@@ -173,49 +199,71 @@
               </select>
 
               <div class="flex gap-2">
-                <input id="theatreInput" type="text" placeholder="Or search / type theatre name..."
+                <input id="theatreInput" type="text" placeholder="Or search custom theatre name..."
                   list="theatreSuggestions"
-                  class="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm
+                  class="flex-1 bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-sm
                          focus:outline-none focus:border-bms/60 transition placeholder-zinc-600"
                   onkeydown="if(event.key==='Enter'){event.preventDefault();addFilter('theatre')}" />
                 <datalist id="theatreSuggestions"></datalist>
-                <button onclick="addFilter('theatre')"
-                  class="px-3 py-2 bg-zinc-700 hover:bg-zinc-600 rounded-lg text-sm transition active:bg-zinc-500">＋</button>
+                <button type="button" onclick="addFilter('theatre')"
+                  class="px-3.5 py-2 bg-zinc-700 hover:bg-zinc-600 rounded-xl text-sm transition active:scale-95 font-bold">＋</button>
               </div>
               <div id="theatreTags" class="flex flex-wrap gap-1.5 mt-2 empty:hidden"></div>
             </div>
 
             <!-- Date -->
             <div>
-              <label class="block text-xs text-zinc-500 mb-1 font-medium">📅 Date(s)</label>
-              <p class="text-xs text-zinc-700 mb-2">Only alert for specific dates.</p>
+              <label class="block text-xs text-zinc-400 mb-1 font-semibold">📅 Date Filter</label>
               <div class="flex gap-2">
                 <input id="dateInput" type="date"
-                  class="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm
+                  class="flex-1 bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-sm
                          focus:outline-none focus:border-bms/60 transition text-zinc-200 [color-scheme:dark]"
                   onkeydown="if(event.key==='Enter'){event.preventDefault();addFilter('date')}" />
-                <button onclick="addFilter('date')"
-                  class="px-3 py-2 bg-zinc-700 hover:bg-zinc-600 rounded-lg text-sm transition active:bg-zinc-500">＋</button>
+                <button type="button" onclick="addFilter('date')"
+                  class="px-3.5 py-2 bg-zinc-700 hover:bg-zinc-600 rounded-xl text-sm transition active:scale-95 font-bold">＋</button>
               </div>
               <div id="dateTags" class="flex flex-wrap gap-1.5 mt-2 empty:hidden"></div>
             </div>
 
             <!-- Time window -->
             <div>
-              <label class="block text-xs text-zinc-500 mb-1 font-medium">⏰ Show Time Window</label>
-              <p class="text-xs text-zinc-700 mb-2">Only alert for shows in this range.</p>
+              <label class="block text-xs text-zinc-400 mb-1.5 font-semibold flex items-center justify-between">
+                <span>⏰ Show Time Window</span>
+                <span class="text-[10px] text-zinc-500 font-normal">1-tap presets</span>
+              </label>
+
+              <!-- Time Presets -->
+              <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5 mb-2.5">
+                <button type="button" onclick="setTimePreset('', '12:00', this)"
+                  class="time-preset-btn text-xs bg-zinc-800/80 hover:bg-zinc-700 border border-zinc-700/60 text-zinc-300 py-1.5 px-2 rounded-lg transition text-center">
+                  🌅 Morning (&lt;12 PM)
+                </button>
+                <button type="button" onclick="setTimePreset('12:00', '16:00', this)"
+                  class="time-preset-btn text-xs bg-zinc-800/80 hover:bg-zinc-700 border border-zinc-700/60 text-zinc-300 py-1.5 px-2 rounded-lg transition text-center">
+                  ☀️ Matinee (12-4 PM)
+                </button>
+                <button type="button" onclick="setTimePreset('16:00', '20:00', this)"
+                  class="time-preset-btn text-xs bg-zinc-800/80 hover:bg-zinc-700 border border-zinc-700/60 text-zinc-300 py-1.5 px-2 rounded-lg transition text-center">
+                  🌆 Evening (4-8 PM)
+                </button>
+                <button type="button" onclick="setTimePreset('20:00', '', this)"
+                  class="time-preset-btn text-xs bg-zinc-800/80 hover:bg-zinc-700 border border-zinc-700/60 text-zinc-300 py-1.5 px-2 rounded-lg transition text-center">
+                  🌙 Night (&gt;8 PM)
+                </button>
+              </div>
+
               <div class="grid grid-cols-2 gap-2">
                 <div>
-                  <label class="text-xs text-zinc-600 mb-1 block">From</label>
+                  <label class="text-[11px] text-zinc-500 mb-1 block">From</label>
                   <input id="timeFrom" type="time"
-                    class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm
+                    class="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-sm
                            focus:outline-none focus:border-bms/60 transition text-zinc-200 [color-scheme:dark]"
                     onchange="updateFilterBadge()" />
                 </div>
                 <div>
-                  <label class="text-xs text-zinc-600 mb-1 block">To</label>
+                  <label class="text-[11px] text-zinc-500 mb-1 block">To</label>
                   <input id="timeTo" type="time"
-                    class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm
+                    class="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-sm
                            focus:outline-none focus:border-bms/60 transition text-zinc-200 [color-scheme:dark]"
                     onchange="updateFilterBadge()" />
                 </div>
@@ -257,10 +305,13 @@
           <span id="monitorCount" class="chip bg-zinc-800 text-zinc-500 text-xs py-0.5 px-2">0</span>
         </h2>
         <button onclick="loadMonitors()"
-          class="text-xs text-zinc-600 hover:text-zinc-400 transition px-2 py-1">
+          class="text-xs text-zinc-500 hover:text-zinc-300 transition px-2.5 py-1 rounded-lg hover:bg-zinc-800/80 flex items-center gap-1">
           ↻ Refresh
         </button>
       </div>
+
+      <!-- Quick Stats Summary Banner -->
+      <div id="statsBanner"></div>
 
       <div id="monitorsContainer">
         <div id="emptyState" class="text-center py-20 text-zinc-700">
