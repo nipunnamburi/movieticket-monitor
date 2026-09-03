@@ -174,20 +174,26 @@ def _run_local_check(monitor_id: int) -> None:
         filter_time_from = m.get("filter_time_from") or "",
         filter_time_to   = m.get("filter_time_to") or "",
     )
-    old_filtered = scraper.apply_filters(m.get("snapshot") or {}, **flt)
+    old_shows    = m.get("snapshot") or {}
+    old_filtered = scraper.apply_filters(old_shows, **flt)
     new_filtered = scraper.apply_filters(shows, **flt)
-    changes = state.compute_diff(old_filtered, new_filtered)
-    
+
+    # First run: save baseline silently — no alert
+    is_first_run = not old_shows
+    openings = [] if is_first_run else state.availability_openings(
+        state.compute_diff(old_filtered, new_filtered)
+    )
+
     db.update_monitor(monitor_id, {"last_checked": now, "last_error": "", "snapshot": shows})
-    
-    if changes:
+
+    if openings:
         cfg = _load_email_cfg()
         if cfg.get("app_password") and cfg.get("from"):
             cfg["to"] = m.get("email_to") or cfg.get("to")
-            if notifier.send_alert(cfg, m, changes, m.get("interval_minutes", 15)):
-                db.save_alert(monitor_id, changes)
+            if notifier.send_alert(cfg, m, openings):
+                db.save_alert(monitor_id, openings)
         else:
-            db.save_alert(monitor_id, changes)
+            db.save_alert(monitor_id, openings)
 
 # ── Helper for Theatre Autocomplete ───────────────────────────────────────────
 

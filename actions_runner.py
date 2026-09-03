@@ -3,11 +3,19 @@ from __future__ import annotations
 """
 actions_runner.py — GitHub Actions entry point.
 
-Reads all active monitors from Neon Postgres, scrapes BookMyShow via
-Playwright, diffs against the previous snapshot, and sends Gmail alerts.
-Triggered by the GitHub Actions cron schedule or workflow_dispatch.
+Monitoring flow (per spec):
+  1. Fetch current shows from BookMyShow
+  2. Apply user filters
+  3. Compare with previous snapshot
+  4. Alert ONLY if new shows became bookable (NOT AVAILABLE → AVAILABLE)
+  5. Save updated snapshot
 
-Environment variables (set as GitHub Secrets):
+A show is uniquely identified by: theatre + date + showtime
+Repeated alerts for the same show are suppressed automatically — the snapshot
+comparison means once a show is "available" in old AND new, compute_diff()
+finds no change and availability_openings() returns nothing.
+
+Environment variables (GitHub Secrets):
   DATABASE_URL       — Neon Postgres connection string
   EMAIL_FROM         — Gmail address
   EMAIL_APP_PASSWORD — Gmail App Password
@@ -54,8 +62,6 @@ def run_check(monitor: dict) -> None:
 
     # ── Scrape ──────────────────────────────────────────────────────────────
     try:
-        # scraper.scrape() returns {"shows": {date: {theatre: {time: status}}},
-        #                           "name": str, "url": str, "city": str, "error": str|None}
         scrape_result = scraper.scrape(monitor)
     except Exception as exc:
         log.error("Scrape failed for #%d: %s", mid, exc)
@@ -66,7 +72,6 @@ def run_check(monitor: dict) -> None:
         })
         return
 
-    # ── Check for scrape-level errors ────────────────────────────────────────
     if scrape_result.get("error"):
         log.warning("Scrape error for #%d: %s", mid, scrape_result["error"])
         db.update_monitor(mid, {
@@ -76,89 +81,71 @@ def run_check(monitor: dict) -> None:
         })
         return
 
-    # ── Extract the shows dict (date → theatre → time → status) ─────────────
-    # IMPORTANT: scrape_result["shows"] is the actual snapshot, not the full result dict
+    # ── Extract shows dict ───────────────────────────────────────────────────
     new_shows = scrape_result.get("shows") or {}
     log.info("  Scrape returned %d date bucket(s)", len(new_shows))
 
     if not new_shows:
-        log.warning("  Scraper returned empty shows — page may have changed structure")
-        log.warning("  Saving empty snapshot and continuing (no alert sent)")
+        log.warning("  Scraper returned empty shows")
         db.update_monitor(mid, {
             "last_checked": _now(),
-            "last_error":   "Scraper returned no shows — check GitHub Actions logs for selector debug info",
+            "last_error":   "Scraper returned no shows — check Actions logs",
             "status":       "error",
         })
         return
 
     # ── Apply filters ────────────────────────────────────────────────────────
-    new_filtered = scraper.apply_filters(
-        new_shows,                                       # ← shows dict, NOT full result
+    filter_kwargs = dict(
         filter_theatres  = monitor.get("filter_theatres") or [],
         filter_dates     = monitor.get("filter_dates") or [],
         filter_time_from = monitor.get("filter_time_from") or "",
         filter_time_to   = monitor.get("filter_time_to") or "",
     )
+    new_filtered = scraper.apply_filters(new_shows, **filter_kwargs)
 
-    # old snapshot stored in DB is already the shows dict
-    old_shows = monitor.get("snapshot") or {}
-    old_filtered = scraper.apply_filters(
-        old_shows,
-        filter_theatres  = monitor.get("filter_theatres") or [],
-        filter_dates     = monitor.get("filter_dates") or [],
-        filter_time_from = monitor.get("filter_time_from") or "",
-        filter_time_to   = monitor.get("filter_time_to") or "",
-    )
+    old_shows    = monitor.get("snapshot") or {}
+    old_filtered = scraper.apply_filters(old_shows, **filter_kwargs)
 
-    # ── Diff ─────────────────────────────────────────────────────────────────
-    changes = state.compute_diff(old_filtered, new_filtered)
+    log.info("  After filters: %d date(s) in new, %d in old",
+             len(new_filtered), len(old_filtered))
 
-    # ── Initial Alert Override ───────────────────────────────────────────────
-    # If no alert has ever been sent for this monitor (or filters were recently updated),
-    # and matching shows exist, report current availability immediately rather than staying silent.
-    if not changes and not monitor.get("last_alert"):
-        log.info("  First alert for monitor #%d — generating current status report", mid)
-        for date_label, theatres in new_filtered.items():
-            if date_label == "_page_hash" or not isinstance(theatres, dict):
-                continue
-            for theatre, times in theatres.items():
-                if isinstance(times, dict):
-                    for showtime, status in times.items():
-                        changes.append({
-                            "date": date_label,
-                            "theatre": theatre,
-                            "showtime": showtime,
-                            "old_status": "initial scan",
-                            "new_status": status,
-                            "change": f"🟢 Currently {status.replace('-', ' ').title()}",
-                        })
+    # ── Diff — only alert on NOT AVAILABLE → AVAILABLE ────────────────────
+    all_changes = state.compute_diff(old_filtered, new_filtered)
+    openings    = state.availability_openings(all_changes)
 
-    log.info("  Diff: %d change(s) detected", len(changes))
+    # First run: old snapshot is empty — save baseline silently, no alert.
+    # The comparison on the *next* run will catch genuinely new shows.
+    is_first_run = not old_shows
+    if is_first_run:
+        log.info("  First run — saving baseline snapshot silently (no alert)")
+        openings = []
 
-    # ── Persist snapshot (store only the shows dict, not the full result) ─────
+    log.info("  %d availability opening(s) detected", len(openings))
+
+    # ── Persist snapshot ─────────────────────────────────────────────────────
     db.update_monitor(mid, {
-        "snapshot":     new_shows,          # ← shows dict only
+        "snapshot":     new_shows,
         "last_checked": _now(),
         "last_error":   None,
         "status":       "active",
     })
 
     # ── Alert ────────────────────────────────────────────────────────────────
-    if changes:
-        log.info("  Sending alert for %d change(s) to %s",
-                 len(changes), monitor.get("email_to"))
+    if openings:
+        log.info("  🔔 Sending alert: %d new show(s) available → %s",
+                 len(openings), monitor.get("email_to"))
         email_cfg = _email_cfg()
         if monitor.get("email_to"):
             email_cfg["to"] = monitor["email_to"]
 
-        ok = notifier.send_alert(email_cfg, monitor, changes)
+        ok = notifier.send_alert(email_cfg, monitor, openings)
         if ok:
-            db.log_alert(mid, changes)
+            db.log_alert(mid, openings)
             log.info("  ✅ Alert sent to %s", email_cfg["to"])
         else:
-            log.warning("  ⚠ Alert failed to send — check EMAIL_FROM / EMAIL_APP_PASSWORD")
+            log.warning("  ⚠ Alert failed — check EMAIL_FROM / EMAIL_APP_PASSWORD")
     else:
-        log.info("  No changes since last check")
+        log.info("  No new availability — no alert sent")
 
 
 def main() -> None:

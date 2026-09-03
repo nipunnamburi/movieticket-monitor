@@ -53,7 +53,7 @@ _HTML = """\
 <body>
 <div class="card">
   <div class="hdr">
-    <h1>🎬 Availability Change Detected</h1>
+    <h1>🔔 New Show Available — Book Now!</h1>
     <p>BookMyShow Monitor · {timestamp}</p>
   </div>
   <div class="body">
@@ -171,8 +171,8 @@ def send_alert(
     smtp_port    = int(email_cfg.get("smtp_port", 587))
 
     subject = (
-        f"🎬 BMS Alert: {monitor.get('name','?')} — "
-        f"{len(changes)} change(s)"
+        f"🔔 BMS: {monitor.get('name','?')} — "
+        f"{len(changes)} new show(s) available — Book now!"
     )
 
     msg = MIMEMultipart("alternative")
