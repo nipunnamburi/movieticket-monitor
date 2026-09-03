@@ -59,7 +59,7 @@ _HTML = """\
   <div class="body">
     <div class="meta">
       <strong>{name}</strong> &mdash; {city}<br>
-      <span>{change_count} change(s) detected</span>
+      <span>🔔 {change_count} new show(s) now bookable</span>
       {filters_html}
     </div>
     <table>
@@ -67,8 +67,9 @@ _HTML = """\
         <tr>
           <th>Date</th>
           <th>Theatre</th>
-          <th>Show</th>
+          <th>Showtime</th>
           <th>Status</th>
+          <th>Book</th>
         </tr>
       </thead>
       <tbody>
@@ -76,7 +77,7 @@ _HTML = """\
       </tbody>
     </table>
     <div class="cta">
-      <a href="{url}">Book Tickets on BookMyShow &rarr;</a>
+      <a href="{url}">Open BookMyShow &rarr;</a>
     </div>
   </div>
   <div class="ft">Monitoring every {interval} min · BMS Monitor</div>
@@ -91,16 +92,67 @@ _ROW = (
     "<td>{theatre}</td>"
     "<td>{showtime}</td>"
     "<td><span class='badge {badge}'>{change}</span></td>"
+    "<td><a href='{book_url}' style='display:inline-block;background:#e50914;color:#fff;"
+    "text-decoration:none;padding:5px 12px;border-radius:5px;font-size:12px;font-weight:700'>"
+    "Book →</a></td>"
     "</tr>"
 )
 
 
+_MONTHS_SHORT = {
+    "Jan": "01", "Feb": "02", "Mar": "03", "Apr": "04",
+    "May": "05", "Jun": "06", "Jul": "07", "Aug": "08",
+    "Sep": "09", "Oct": "10", "Nov": "11", "Dec": "12",
+}
+
+
+def _date_label_to_code(label: str) -> str:
+    """
+    Convert 'Thu, 04 Sep' → '20260904'.
+    Assumes the nearest future year matching that month/day.
+    """
+    import re
+    from datetime import date, timedelta
+    m = re.search(r"(\d{1,2})\s+([A-Za-z]+)", label)
+    if not m:
+        return ""
+    day = m.group(1).zfill(2)
+    month = _MONTHS_SHORT.get(m.group(2)[:3].capitalize(), "")
+    if not month:
+        return ""
+    today = date.today()
+    for year in (today.year, today.year + 1):
+        try:
+            candidate = date(year, int(month), int(day))
+            if candidate >= today:
+                return candidate.strftime("%Y%m%d")
+        except ValueError:
+            continue
+    return ""
+
+
+def _build_book_url(monitor_url: str, date_label: str) -> str:
+    """Construct a direct buytickets URL for a specific date."""
+    import re
+    date_code = _date_label_to_code(date_label)
+    # Extract event code from URL
+    m = re.search(r"/(ET\d{8})", monitor_url)
+    if not m or not date_code:
+        return monitor_url
+    event_code = m.group(1)
+    # Build base from movie URL (strip /buytickets/... if already present)
+    base = re.sub(r"/buytickets/.*", "", monitor_url.split("?")[0].rstrip("/"))
+    return f"{base}/buytickets/{event_code}/{date_code}"
+
+
 def _badge(change: str) -> str:
     c = change.lower()
-    if "🆕" in change or "new" in c:     return "b-new"
-    if "🟢" in change or "open" in c:    return "b-open"
-    if "🟡" in change or "fast" in c:    return "b-fast"
-    if "🔴" in change or "sold" in c:    return "b-sold"
+    if "🟢" in change or "open" in c or "new" in c or "available" in c:
+        return "b-open"
+    if "🟡" in change or "fast" in c or "filling" in c:
+        return "b-fast"
+    if "🔴" in change or "sold" in c:
+        return "b-sold"
     return "b-info"
 
 
@@ -121,6 +173,7 @@ def _build_filters_html(monitor: dict) -> str:
 
 
 def _build_html(monitor: dict, changes: list[dict], interval: int) -> str:
+    monitor_url = monitor.get("url", "#")
     rows = "\n".join(
         _ROW.format(
             date=c.get("date", "—"),
@@ -128,6 +181,7 @@ def _build_html(monitor: dict, changes: list[dict], interval: int) -> str:
             showtime=c["showtime"],
             change=c["change"],
             badge=_badge(c["change"]),
+            book_url=_build_book_url(monitor_url, c.get("date", "")),
         )
         for c in changes
     )
@@ -135,7 +189,7 @@ def _build_html(monitor: dict, changes: list[dict], interval: int) -> str:
         timestamp=datetime.now().strftime("%d %b %Y, %I:%M %p"),
         name=monitor.get("name", "Unknown"),
         city=monitor.get("city", ""),
-        url=monitor.get("url", "#"),
+        url=monitor_url,
         change_count=len(changes),
         rows=rows,
         interval=interval,
