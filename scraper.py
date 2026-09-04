@@ -151,47 +151,71 @@ def _extract_region_and_event(url: str) -> tuple[str, str]:
 
 async def _intercept_api(page: Page, url: str, date_codes: list[str]) -> dict[str, Any]:
     """
-    Load the BMS buytickets page and intercept/extract the JSON API response.
+    Load the BMS buytickets page and extract JSON data via XHR interception or deep window state search.
     Returns: { date_code: API_data_dict }
     """
-    all_api_responses: dict[str, Any] = {}  # date_code → JSON response
+    all_api_responses: dict[str, Any] = {}
 
-    # Register response interceptor BEFORE navigation (for XHR requests)
+    # 1. Broad XHR Response Interceptor
     async def on_response(response):
-        if "showtimes-by-event" in response.url and "primary-dynamic" in response.url:
-            dc_match = re.search(r"dateCode=(\d{8})", response.url)
-            dc = dc_match.group(1) if dc_match else "unknown"
+        u_lower = response.url.lower()
+        if any(k in u_lower for k in ("showtime", "showtimes", "primary-dynamic", "buytickets")) or "datecode=" in u_lower:
+            dc_match = re.search(r"datecode=(\d{8})", u_lower)
+            dc = dc_match.group(1) if dc_match else ""
             try:
                 data = await response.json()
-                all_api_responses[dc] = data
-            except Exception as exc:
-                logger.warning("  API response parse error: %s", exc)
+                if isinstance(data, dict):
+                    json_str = json.dumps(data)
+                    if "showtimeWidgets" in json_str or "venue-card" in json_str:
+                        target_dc = dc or (date_codes[0] if date_codes else "unknown")
+                        all_api_responses[target_dc] = data
+            except Exception:
+                pass
 
     page.on("response", on_response)
 
-    # Helper function to extract window.__INITIAL_STATE__ data directly
-    async def extract_initial_state():
+    # 2. Deep recursive search in window.__INITIAL_STATE__ / window.__NEXT_DATA__
+    async def extract_initial_state(current_dc: str):
         try:
             state_data = await page.evaluate('''() => {
-                const queries = window.__INITIAL_STATE__?.showtimesFunctionalApi?.queries;
-                if (!queries) return null;
+                const st = window.__INITIAL_STATE__ || window.__NEXT_DATA__;
+                if (!st) return null;
+
+                // Priority 1: Check queries inside showtimesFunctionalApi
+                const queries = st.showtimesFunctionalApi?.queries || {};
                 for (const k in queries) {
-                    if (k.startsWith('fetchPrimaryDynamic')) {
-                        const parts = k.split('-');
-                        // Key format: fetchPrimaryDynamic-ET00515244---20260904-HYD
-                        for (const p of parts) {
-                            if (/^\d{8}$/.test(p)) {
-                                return { dateCode: p, data: queries[k].data };
-                            }
+                    const qData = queries[k]?.data;
+                    if (qData && (qData.data?.showtimeWidgets || qData.showtimeWidgets)) {
+                        const dcMatch = k.match(/20\d{6}/);
+                        const dc = dcMatch ? dcMatch[0] : null;
+                        return { dateCode: dc, data: qData };
+                    }
+                }
+
+                // Priority 2: Deep recursive search for showtimeWidgets anywhere in window state
+                function findWidgets(obj, depth = 0) {
+                    if (!obj || depth > 6) return null;
+                    if (obj.showtimeWidgets && Array.isArray(obj.showtimeWidgets)) return obj;
+                    for (const k in obj) {
+                        if (typeof obj[k] === 'object' && obj[k] !== null) {
+                            const res = findWidgets(obj[k], depth + 1);
+                            if (res) return res;
                         }
                     }
+                    return null;
+                }
+
+                const found = findWidgets(st);
+                if (found) {
+                    return { dateCode: null, data: { data: found } };
                 }
                 return null;
             }''')
-            if state_data and state_data.get("dateCode") and state_data.get("data"):
-                dc = state_data["dateCode"]
+            if state_data and state_data.get("data"):
+                raw_dc = str(state_data.get("dateCode") or "")
+                dc = raw_dc if re.match(r"^\d{8}$", raw_dc) else current_dc
                 all_api_responses[dc] = state_data["data"]
-                logger.info("  ✅ Extracted initial state for dateCode=%s", dc)
+                logger.info("  ✅ Extracted showtimes via deep state search for dateCode=%s", dc)
         except Exception as exc:
             logger.warning("  Initial state extraction warning: %s", exc)
 
@@ -206,16 +230,16 @@ async def _intercept_api(page: Page, url: str, date_codes: list[str]) -> dict[st
         logger.warning("  DOM load timeout — continuing")
 
     await page.wait_for_timeout(4000)
-    await extract_initial_state()
+    await extract_initial_state(first_date or "unknown")
 
-    # If multiple dates needed and not already captured, navigate to each
+    # If multiple dates needed and not already captured, navigate to each date
     for dc in date_codes[1:]:
         if dc not in all_api_responses:
             try:
                 nav2 = _build_buytickets_url(url, dc)
                 await page.goto(nav2, wait_until="domcontentloaded", timeout=30_000)
                 await page.wait_for_timeout(3000)
-                await extract_initial_state()
+                await extract_initial_state(dc)
             except Exception:
                 pass
 
