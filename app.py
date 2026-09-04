@@ -281,10 +281,11 @@ def api_create_monitor():
         "interval_minutes": int(body.get("interval_minutes", 15)),
     })
     
-    # Trigger initial check (via GitHub Actions if configured, else background thread)
+    # Trigger initial check (via GitHub Actions if configured, else background thread locally)
     if not _trigger_github_check(monitor["id"]):
-        t = threading.Thread(target=_run_local_check, args=(monitor["id"],), daemon=True)
-        t.start()
+        if not os.environ.get("VERCEL"):
+            t = threading.Thread(target=_run_local_check, args=(monitor["id"],), daemon=True)
+            t.start()
         
     return jsonify(monitor), 201
 
@@ -299,8 +300,9 @@ def api_update_monitor(mid: int):
         return jsonify(error="Not found"), 404
     # Trigger an immediate check via GitHub Actions / local runner
     if not _trigger_github_check(mid):
-        t = threading.Thread(target=_run_local_check, args=(mid,), daemon=True)
-        t.start()
+        if not os.environ.get("VERCEL"):
+            t = threading.Thread(target=_run_local_check, args=(mid,), daemon=True)
+            t.start()
     return jsonify(updated)
 
 @app.route("/api/monitors/<int:mid>", methods=["DELETE"])
@@ -329,15 +331,12 @@ def api_check_now(mid: int):
             message="⚡ Check dispatched to GitHub Actions! Results will update in ~30s.",
         )
 
-    # 2. If running on Vercel without GITHUB_TOKEN set
+    # 2. If running on Vercel without GITHUB_TOKEN set, return 503 error
     if os.environ.get("VERCEL"):
-        t = threading.Thread(target=_run_local_check, args=(mid,), daemon=True)
-        t.start()
         return jsonify(
-            ok=True,
-            mode="async",
-            message="Check queued! (Add GITHUB_TOKEN to Vercel env vars for automated cloud runs)",
-        )
+            ok=False,
+            error="GitHub Actions is not configured. Set GITHUB_TOKEN and GITHUB_REPO in Vercel.",
+        ), 503
 
     # 3. Running locally on dev machine where Playwright is installed
     t = threading.Thread(target=_run_local_check, args=(mid,), daemon=True)
