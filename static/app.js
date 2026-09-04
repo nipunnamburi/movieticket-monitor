@@ -669,6 +669,8 @@ async function loadEmailConfig() {
     const cfgTo = document.getElementById('cfgTo');
     if (cfgTo) cfgTo.value = cfg.to || '';
   } catch { /* silent */ }
+}
+
 async function testCurrentEmailConfig() {
   const btnIcon = document.getElementById('emailTestIcon');
   if (btnIcon) btnIcon.textContent = '⟳ Testing…';
