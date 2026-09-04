@@ -444,8 +444,10 @@ function makeCard(m) {
   if (!filters.length)
     filters.push('<span class="chip bg-zinc-800/50 text-zinc-500 text-[11px]">All shows & venues</span>');
 
-  const checked  = m.last_checked ? timeAgo(m.last_checked) : 'Never';
-  const nextRun  = m.next_run ? timeFromNow(m.next_run) : '—';
+  const checked = m.last_checked ? timeAgo(m.last_checked) : 'Never';
+  const nextRun = m.status === 'paused'
+    ? 'Paused'
+    : (m.next_run ? timeFromNow(m.next_run) : 'GitHub Actions (~15m)');
 
   card.innerHTML = `
     <!-- Top row -->
