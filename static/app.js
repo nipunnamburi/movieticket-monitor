@@ -658,23 +658,14 @@ async function loadEmailConfig() {
     const label   = document.getElementById('emailLabel');
     const mIcon   = document.getElementById('mobileEmailIcon');
 
-    if (cfg.configured) {
-      dot.className   = 'w-1.5 h-1.5 rounded-full bg-green-500 shrink-0';
-      label.textContent = cfg.from?.split('@')[0] || 'Email ✓';
-      if (mIcon) mIcon.textContent = '✅';
-    } else {
-      dot.className   = 'w-1.5 h-1.5 rounded-full bg-red-500 shrink-0';
-      label.textContent = 'Setup needed';
-      if (mIcon) mIcon.textContent = '⚠️';
-    }
+    if (dot) dot.className = cfg.configured ? 'w-1.5 h-1.5 rounded-full bg-green-500 shrink-0' : 'w-1.5 h-1.5 rounded-full bg-red-500 shrink-0';
+    if (label) label.textContent = cfg.configured ? (cfg.from?.split('@')[0] || 'Email ✓') : 'Setup needed';
+    if (mIcon) mIcon.textContent = cfg.configured ? '✅' : '⚠️';
 
-    // Show cloud mode notice if applicable
-    document.getElementById('cloudModeNotice')?.classList.toggle('hidden', !cfg.cloud_managed);
-    document.getElementById('emailFormFields')?.classList.toggle('opacity-50', cfg.cloud_managed);
-    document.getElementById('emailFormFields')?.classList.toggle('pointer-events-none', cfg.cloud_managed);
-
-    document.getElementById('cfgFrom').value = cfg.from || '';
-    document.getElementById('cfgTo').value   = cfg.to   || '';
+    const cfgFrom = document.getElementById('cfgFrom');
+    if (cfgFrom) cfgFrom.value = cfg.from || '';
+    const cfgTo = document.getElementById('cfgTo');
+    if (cfgTo) cfgTo.value = cfg.to || '';
   } catch { /* silent */ }
 }
 
