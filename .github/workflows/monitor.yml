@@ -2,8 +2,8 @@ name: BMS Monitor
 
 on:
   schedule:
-    # Every 30 minutes. Change to "*/15 * * * *" if repo is public (unlimited minutes).
-    - cron: "*/30 * * * *"
+    # Check every 5 minutes for due monitors (interval_minutes & last_checked)
+    - cron: "*/5 * * * *"
   workflow_dispatch:
     # Allows manual "Check Now" trigger from the web UI (via GitHub API)
     inputs:

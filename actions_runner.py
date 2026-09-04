@@ -149,6 +149,34 @@ def run_check(monitor: dict) -> None:
         log.info("  No new availability — no alert sent")
 
 
+def is_monitor_due(monitor: dict, force: bool = False) -> bool:
+    """
+    Return True if monitor is due to be checked based on interval_minutes and last_checked.
+    If force is True (e.g. manual trigger via workflow_dispatch / Check button), always return True.
+    """
+    if force:
+        return True
+    
+    last_checked_str = monitor.get("last_checked")
+    if not last_checked_str:
+        return True
+        
+    try:
+        last_dt = datetime.fromisoformat(last_checked_str.replace("Z", "+00:00"))
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=timezone.utc)
+            
+        now_dt = datetime.now(timezone.utc)
+        elapsed_minutes = (now_dt - last_dt).total_seconds() / 60.0
+        interval = float(monitor.get("interval_minutes") or 15)
+        
+        # Buffer of 1 minute to account for minor cron execution jitter
+        return elapsed_minutes >= (interval - 1.0)
+    except Exception as exc:
+        log.warning("Could not parse last_checked '%s': %s — running check", last_checked_str, exc)
+        return True
+
+
 def main() -> None:
     db.init_db()
 
@@ -159,16 +187,19 @@ def main() -> None:
         if not monitor:
             log.error("Monitor #%s not found", specific_id)
             sys.exit(1)
-        monitors = [monitor]
+        monitors = [(monitor, True)]  # (monitor, force=True)
     else:
-        monitors = db.get_monitors(active_only=True)
+        active_monitors = db.get_monitors(active_only=True)
+        monitors = [(m, False) for m in active_monitors]
 
     if not monitors:
-        log.info("No active monitors to check.")
+        log.info("No active monitors found.")
         return
 
-    log.info("Checking %d monitor(s)…", len(monitors))
-    for m in monitors:
+    due_monitors = [(m, force) for (m, force) in monitors if is_monitor_due(m, force=force)]
+    log.info("Found %d active monitor(s) (%d due to run now)", len(monitors), len(due_monitors))
+
+    for m, force in due_monitors:
         try:
             run_check(m)
         except Exception as exc:
