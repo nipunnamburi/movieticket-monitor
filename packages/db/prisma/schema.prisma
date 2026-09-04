@@ -1,0 +1,50 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Monitor {
+  id                String     @id @default(cuid())
+  name              String
+  url               String
+  city              String
+  language          String?
+  status            String     @default("active") // "active" | "paused" | "error"
+  checkIntervalSec  Int        @default(30)
+  lastChecked       DateTime?
+  lastError         String?
+  snapshot          Json?      // Latest showtimes state snapshot
+  filterTheatres    String[]   @default([])
+  filterDates       String[]   @default([])
+  filterTimeFrom    String?
+  filterTimeTo      String?
+  telegramChatId    String?
+  discordWebhookUrl String?
+  emailTo           String?
+  alerts            AlertLog[]
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  @@index([status])
+}
+
+model AlertLog {
+  id         String   @id @default(cuid())
+  monitorId  String
+  monitor    Monitor  @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  openings   Json
+  channels   String[] @default([]) // ["TELEGRAM", "DISCORD", "EMAIL"]
+  createdAt  DateTime @default(now())
+
+  @@index([monitorId, createdAt])
+}
+
+model SystemSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}

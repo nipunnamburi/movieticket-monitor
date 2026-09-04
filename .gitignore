@@ -18,3 +18,4 @@ state.json
 # Editor
 .vscode/
 .idea/
+node_modules
