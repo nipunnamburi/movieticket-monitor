@@ -347,6 +347,35 @@ def api_check_now(mid: int):
         message="Local check running in background — updating shortly!",
     )
 
+@app.route("/api/health", methods=["GET"])
+def api_health():
+    github_token_set = bool(os.environ.get("GITHUB_TOKEN"))
+    github_repo = os.environ.get("GITHUB_REPO", "nipunnamburi/bms-private")
+    email_cfg = _load_email_cfg()
+    monitors = db.get_monitors()
+    active_monitors = [m for m in monitors if m.get("status") == "active"]
+
+    return jsonify({
+        "status": "ok",
+        "environment": "Vercel Serverless" if os.environ.get("VERCEL") else "Self-Hosted / Local",
+        "database": "Neon Postgres" if db.is_postgres() else "SQLite",
+        "github_actions": {
+            "configured": github_token_set,
+            "repo": github_repo,
+            "dispatch_ready": github_token_set and bool(github_repo),
+        },
+        "email": {
+            "configured": email_cfg.get("configured", False),
+            "from": email_cfg.get("from", ""),
+            "to": email_cfg.get("to", ""),
+            "cloud_managed": email_cfg.get("cloud_managed", False),
+        },
+        "monitors": {
+            "total": len(monitors),
+            "active": len(active_monitors),
+        }
+    })
+
 @app.route("/api/monitors/<int:mid>/alerts", methods=["GET"])
 def api_alerts(mid: int):
     limit = min(int(request.args.get("limit", 30)), 100)
