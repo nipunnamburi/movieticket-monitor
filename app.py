@@ -372,6 +372,11 @@ def api_get_email_config():
 
 @app.route("/api/email-config", methods=["POST"])
 def api_save_email_config():
+    if _is_cloud_mode():
+        return jsonify(
+            ok=False,
+            error="Cloud mode active. Email credentials are managed via environment variables (EMAIL_FROM, EMAIL_APP_PASSWORD, EMAIL_TO) in Vercel / GitHub Actions."
+        ), 400
     body = request.get_json(force=True, silent=True) or {}
     _save_email_cfg({
         "from":         body.get("from", ""),
@@ -386,20 +391,40 @@ def api_save_email_config():
 def api_test_email():
     body = request.get_json(force=True, silent=True) or {}
     cfg = _load_email_cfg()
-    if not cfg["cloud_managed"]:
-        cfg["from"] = body.get("from") or cfg["from"]
-        cfg["app_password"] = body.get("app_password") or cfg["app_password"]
-    cfg["to"] = body.get("to") or cfg.get("to") or cfg.get("from")
 
-    fake_monitor = {"name": "Test Movie", "city": "Hyderabad", "url": "https://in.bookmyshow.com/"}
+    # If parameters provided in body (local mode), override
+    if not cfg["cloud_managed"]:
+        if body.get("from"):
+            cfg["from"] = body["from"]
+        if body.get("app_password"):
+            cfg["app_password"] = body["app_password"]
+        if body.get("to"):
+            cfg["to"] = body["to"]
+    elif body.get("to"):
+        cfg["to"] = body["to"]
+
+    if not cfg.get("from") or not cfg.get("app_password"):
+        return jsonify(
+            ok=False,
+            message="Email credentials missing. Please set EMAIL_FROM and EMAIL_APP_PASSWORD in environment variables."
+        ), 400
+
+    fake_monitor = {"name": "Test Alert Monitor", "city": "Hyderabad", "url": "https://in.bookmyshow.com/", "language": "Telugu"}
     fake_changes = [
-        {"date": "Today", "theatre": "Test Theatre", "showtime": "06:30 PM",
-         "old_status": "sold-out", "new_status": "available", "change": "🟢 Tickets opened up!"}
+        {
+            "date": "Today",
+            "date_code": "20260904",
+            "theatre": "Test Cinema",
+            "showtime": "07:00 PM",
+            "old_status": "not listed",
+            "new_status": "available",
+            "change": "🟢 Tickets opened up!",
+        }
     ]
     ok = notifier.send_alert(cfg, fake_monitor, fake_changes)
     if ok:
-        return jsonify(ok=True, message="Test email sent!")
-    return jsonify(ok=False, message="Failed to send — check credentials"), 500
+        return jsonify(ok=True, message=f"Test alert email sent to {cfg['to']}!")
+    return jsonify(ok=False, message="Failed to send test email — verify EMAIL_FROM and EMAIL_APP_PASSWORD credentials"), 500
 
 # ── DB Initialization on Startup ──────────────────────────────────────────────
 

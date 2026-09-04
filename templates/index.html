@@ -60,6 +60,15 @@
       <span class="text-bms text-xl leading-none">🎬</span>
       <span class="font-bold text-base tracking-tight">BMS Monitor</span>
     </div>
+    <div class="flex items-center gap-2">
+      <button id="emailStatusBtn" onclick="testCurrentEmailConfig()"
+        title="Click to test configured email credentials"
+        class="flex items-center gap-1.5 bg-zinc-900 border border-zinc-800 rounded-full px-3 py-1.5 text-xs transition hover:border-zinc-600 active:scale-95">
+        <span id="emailDot" class="w-1.5 h-1.5 rounded-full bg-zinc-600 shrink-0"></span>
+        <span id="emailLabel" class="text-zinc-400">Email</span>
+        <span id="emailTestIcon" class="text-zinc-500 text-[10px] ml-0.5">✉️ Test</span>
+      </button>
+    </div>
   </div>
 </header>
 

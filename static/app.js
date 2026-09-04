@@ -667,10 +667,25 @@ async function loadEmailConfig() {
     const cfgTo = document.getElementById('cfgTo');
     if (cfgTo) cfgTo.value = cfg.to || '';
   } catch { /* silent */ }
+async function testCurrentEmailConfig() {
+  const btnIcon = document.getElementById('emailTestIcon');
+  if (btnIcon) btnIcon.textContent = '⟳ Testing…';
+  toast('Sending test email using configured environment credentials…');
+  try {
+    const res  = await api('POST', '/api/email-config/test');
+    const data = await res.json();
+    if (res.ok) {
+      toast(data.message || '✅ Test email sent!', 'success');
+    } else {
+      toast(data.message || data.error || 'Failed to send test email', 'error');
+    }
+  } catch {
+    toast('Network error testing email credentials', 'error');
+  } finally {
+    if (btnIcon) btnIcon.textContent = '✉️ Test';
+    loadEmailConfig();
+  }
 }
-
-function openEmailModal()  { document.getElementById('emailModal').classList.remove('hidden'); loadEmailConfig(); }
-function closeEmailModal() { document.getElementById('emailModal').classList.add('hidden'); }
 
 async function saveEmailConfig() {
   await api('POST', '/api/email-config', {
