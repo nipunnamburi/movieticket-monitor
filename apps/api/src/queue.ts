@@ -1,9 +1,14 @@
 import { Redis } from 'ioredis';
-import { Queue } from 'bullmq';
+import { Queue, QueueEvents } from 'bullmq';
 import dotenv from 'dotenv';
 import path from 'path';
 
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
 const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
 
@@ -31,4 +36,8 @@ export const bmsAlertQueue = new Queue('bms-alert', {
     removeOnComplete: 100,
     removeOnFail: 200,
   },
+});
+
+export const bmsAlertEvents = new QueueEvents('bms-alert', {
+  connection: new Redis(redisUrl, { maxRetriesPerRequest: null, enableReadyCheck: false }),
 });

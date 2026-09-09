@@ -1,5 +1,27 @@
 // app.js — BMS Monitor frontend logic (mobile-first)
 
+function getVaultKey() {
+  let key = localStorage.getItem('bms_vault_key');
+  if (!key) {
+    key = 'vlt_' + Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 10);
+    localStorage.setItem('bms_vault_key', key);
+  }
+  return key;
+}
+
+// Automatically attach private vault key to all requests
+const _origFetch = window.fetch;
+window.fetch = function(url, options = {}) {
+  options = { ...options };
+  options.headers = options.headers || {};
+  if (options.headers instanceof Headers) {
+    options.headers.set('X-Vault-Key', getVaultKey());
+  } else {
+    options.headers['X-Vault-Key'] = getVaultKey();
+  }
+  return _origFetch(url, options);
+};
+
 // ── State ──────────────────────────────────────────────────────────────────
 const state = {
   filters:     { theatres: [], dates: [], timeFrom: '', timeTo: '' },

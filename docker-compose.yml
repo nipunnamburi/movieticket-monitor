@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: bms_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: bms_monitor
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: bms_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bms_app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "5055:5055"
+    environment:
+      - NODE_ENV=production
+      - PORT=5055
+      - DATABASE_URL=postgresql://postgres:postgrespassword@postgres:5432/bms_monitor?schema=public
+      - REDIS_URL=redis://redis:6379
+      - EMAIL_FROM=${EMAIL_FROM}
+      - EMAIL_APP_PASSWORD=${EMAIL_APP_PASSWORD}
+      - DEFAULT_EMAIL_TO=${DEFAULT_EMAIL_TO}
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - CALLMEBOT_API_KEY=${CALLMEBOT_API_KEY}
+      - DEFAULT_WHATSAPP_TO=${DEFAULT_WHATSAPP_TO}
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
+      - TWILIO_WHATSAPP_FROM=${TWILIO_WHATSAPP_FROM}
+
+volumes:
+  postgres_data:
+  redis_data:

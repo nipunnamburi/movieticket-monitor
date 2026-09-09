@@ -63,6 +63,7 @@ def _get_connection() -> Generator[Any, None, None]:
 _SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS monitors (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id         TEXT    NOT NULL DEFAULT '',
     name              TEXT    NOT NULL DEFAULT '',
     url               TEXT    NOT NULL,
     city              TEXT    NOT NULL DEFAULT '',
@@ -93,6 +94,7 @@ CREATE TABLE IF NOT EXISTS alert_log (
 _POSTGRES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS monitors (
     id               SERIAL PRIMARY KEY,
+    client_id        TEXT    NOT NULL DEFAULT '',
     name             TEXT    NOT NULL DEFAULT '',
     url              TEXT    NOT NULL,
     city             TEXT    NOT NULL DEFAULT '',
@@ -128,6 +130,7 @@ def init_db() -> None:
             # Migration check for existing tables
             try:
                 cur.execute("ALTER TABLE monitors ADD COLUMN IF NOT EXISTS language TEXT NOT NULL DEFAULT ''")
+                cur.execute("ALTER TABLE monitors ADD COLUMN IF NOT EXISTS client_id TEXT NOT NULL DEFAULT ''")
             except Exception:
                 pass
         else:
@@ -135,6 +138,10 @@ def init_db() -> None:
             # Migration check for existing SQLite tables
             try:
                 cur.execute("ALTER TABLE monitors ADD COLUMN language TEXT NOT NULL DEFAULT ''")
+            except Exception:
+                pass
+            try:
+                cur.execute("ALTER TABLE monitors ADD COLUMN client_id TEXT NOT NULL DEFAULT ''")
             except Exception:
                 pass
 
@@ -165,15 +172,25 @@ def _now_iso() -> str:
 
 # ── CRUD Operations ────────────────────────────────────────────────────────────
 
-def get_monitors(active_only: bool = False) -> list[dict]:
-    sql = "SELECT * FROM monitors"
+def get_monitors(active_only: bool = False, client_id: str | None = None) -> list[dict]:
+    clauses = []
+    params = []
+    placeholder = "%s" if is_postgres() else "?"
+
     if active_only:
-        sql += " WHERE status = 'active'"
+        clauses.append("status = 'active'")
+    if client_id:
+        clauses.append(f"client_id = {placeholder}")
+        params.append(client_id)
+
+    sql = "SELECT * FROM monitors"
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
     sql += " ORDER BY created_at DESC"
     
     with _get_connection() as con:
         cur = con.cursor()
-        cur.execute(sql)
+        cur.execute(sql, tuple(params) if params else ())
         rows = cur.fetchall()
         return [_row_to_dict(r) for r in rows]
 
@@ -189,7 +206,7 @@ def get_monitor(monitor_id: int) -> dict | None:
 def create_monitor(data: dict) -> dict:
     now = _now_iso()
     fields = (
-        "name", "url", "city", "language", "email_to",
+        "client_id", "name", "url", "city", "language", "email_to",
         "filter_theatres", "filter_dates",
         "filter_time_from", "filter_time_to",
         "interval_minutes",
@@ -216,11 +233,12 @@ def create_monitor(data: dict) -> dict:
             cur = con.cursor()
             cur.execute(
                 """INSERT INTO monitors
-                   (name, url, city, language, email_to,
+                   (client_id, name, url, city, language, email_to,
                     filter_theatres, filter_dates, filter_time_from, filter_time_to,
                     interval_minutes, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
+                    data.get("client_id", ""),
                     data.get("name", ""),
                     data["url"],
                     data.get("city", ""),

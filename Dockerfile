@@ -1,25 +1,32 @@
-FROM mcr.microsoft.com/playwright/python:v1.47.0-noble
+FROM mcr.microsoft.com/playwright:v1.47.0-noble
 
-# Set working directory
 WORKDIR /app
 
-# Install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy dependency manifests
+COPY package*.json ./
+COPY packages/db/package.json ./packages/db/
+COPY packages/shared/package.json ./packages/shared/
+COPY apps/api/package.json ./apps/api/
+COPY apps/worker/package.json ./apps/worker/
+COPY apps/web/package.json ./apps/web/
 
-# Install Chromium (matches our installed playwright version)
-RUN playwright install chromium
+# Install dependencies
+RUN npm ci
 
-# Copy application code
+# Copy application source code
 COPY . .
 
-# Create data directory for persistent SQLite database
-RUN mkdir -p /data
+# Generate Prisma Client
+RUN npm run db:generate
 
-# Use Railway's auto-assigned PORT, default 8080
-ENV PORT=8080
-ENV DATABASE_PATH=/data/monitors.db
+# Build all packages and the React web application
+RUN npm run build
 
-EXPOSE 8080
+# Default environment
+ENV NODE_ENV=production
+ENV PORT=5055
 
-CMD ["python3", "app.py"]
+EXPOSE 5055
+
+# Run API (serving React UI + API) and Worker concurrently
+CMD ["npm", "run", "start"]

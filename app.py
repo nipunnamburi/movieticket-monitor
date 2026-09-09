@@ -236,9 +236,22 @@ def api_clean_url():
     name, city, lang = _parse_movie_info(url)
     return jsonify(url=url, name=name, city=city, language=lang)
 
+def _get_client_id() -> str:
+    return (
+        request.headers.get("X-Vault-Key", "") or
+        request.headers.get("x-vault-key", "") or
+        request.headers.get("X-Client-Token", "") or
+        request.args.get("vaultKey", "") or
+        request.args.get("token", "") or
+        ""
+    ).strip()
+
 @app.route("/api/monitors", methods=["GET"])
 def api_list_monitors():
-    monitors = db.get_monitors()
+    cid = _get_client_id()
+    if not cid:
+        return jsonify([])
+    monitors = db.get_monitors(client_id=cid)
     for m in monitors:
         if _scheduler and _scheduler.get_job(f"mon_{m['id']}"):
             job = _scheduler.get_job(f"mon_{m['id']}")
@@ -251,6 +264,9 @@ def api_list_monitors():
 def api_get_monitor(mid: int):
     m = db.get_monitor(mid)
     if not m:
+        return jsonify(error="Not found"), 404
+    cid = _get_client_id()
+    if cid and m.get("client_id") and m.get("client_id") != cid:
         return jsonify(error="Not found"), 404
     return jsonify(m)
 
@@ -268,7 +284,10 @@ def api_create_monitor():
     if not email_to:
         return jsonify(error="email_to is required"), 400
 
+    cid = _get_client_id() or f"vlt_{os.urandom(6).hex()}"
+
     monitor = db.create_monitor({
+        "client_id":        cid,
         "name":             body.get("name") or parsed_name or url,
         "url":              url,
         "city":             body.get("city") or parsed_city,

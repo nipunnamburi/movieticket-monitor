@@ -18,4 +18,10 @@ state.json
 # Editor
 .vscode/
 .idea/
-node_modules
+node_modules/
+
+# Build artifacts
+dist/
+apps/*/dist/
+packages/*/dist/
+

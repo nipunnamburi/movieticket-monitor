@@ -12,6 +12,7 @@
     "dev:web": "npm run dev --workspace=apps/web",
     "dev": "concurrently \"npm:dev:api\" \"npm:dev:worker\" \"npm:dev:web\"",
     "build": "npm run build --workspaces --if-present",
+    "start": "concurrently \"npm run start --workspace=apps/api\" \"npm run start --workspace=apps/worker\"",
     "db:generate": "npm run generate --workspace=packages/db",
     "db:push": "npm run push --workspace=packages/db",
     "test": "npm run test --workspaces --if-present"

@@ -24,6 +24,7 @@ export interface MonitorFilters {
 
 export interface MonitorDTO {
   id: string;
+  clientId?: string;
   name: string;
   url: string;
   city: string;
@@ -36,15 +37,15 @@ export interface MonitorDTO {
   filterDates: string[];
   filterTimeFrom?: string | null;
   filterTimeTo?: string | null;
-  telegramChatId?: string | null;
-  discordWebhookUrl?: string | null;
   emailTo?: string | null;
+  whatsappPhone?: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface LiveEventPayload {
   type: 'CHECK_STARTED' | 'CHECK_COMPLETED' | 'TICKET_DROP' | 'ERROR' | 'HEARTBEAT';
+  clientId?: string;
   monitorId?: string;
   monitorName?: string;
   timestamp: string;
