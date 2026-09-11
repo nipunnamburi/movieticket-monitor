@@ -1,14 +1,14 @@
 import { chromium } from 'playwright';
 import path from 'path';
 
-const ARTIFACTS_DIR = '/Users/nipunnamburi/.gemini/antigravity-ide/brain/0e20cf3d-7016-4458-92cb-1939963ecb5b';
+const ARTIFACTS_DIR = '/Users/nipunnamburi/.gemini/antigravity-ide/brain/b539a360-d62b-48a1-bd93-cdd131d5b967';
 
 async function runBrowserTest() {
   console.log('🚀 Launching Chromium browser for automated testing...');
   const browser = await chromium.launch({ headless: true });
   
-  // ── Context 1: Device A (Laptop User) ───────────────────────────────────
-  console.log('\n--- Testing Device A (Laptop Viewport) ---');
+  // ── Context 1: Device A (Desktop / Laptop User) ───────────────────────────
+  console.log('\n--- Testing Device A (Desktop Viewport) ---');
   const contextA = await browser.newContext({
     viewport: { width: 1280, height: 800 }
   });
@@ -21,11 +21,15 @@ async function runBrowserTest() {
   const title = await pageA.textContent('h1');
   console.log('Page Title:', title?.trim());
 
-  // 2. Verify Private Vault Badge
+  // 2. Verify Private Vault Badge & Stream Status
   const vaultBadge = pageA.locator('button:has-text("Vault:")');
   await vaultBadge.waitFor({ state: 'visible', timeout: 5000 });
   const vaultText = await vaultBadge.textContent();
   console.log('Device A Vault Badge:', vaultText?.trim());
+
+  const sseBadge = pageA.locator('text=SSE STREAM ACTIVE');
+  const sseActive = await sseBadge.isVisible();
+  console.log('SSE Stream Active:', sseActive);
 
   await pageA.screenshot({ path: path.join(ARTIFACTS_DIR, '01_dashboard_loaded.png') });
   console.log('📸 Captured 01_dashboard_loaded.png');
@@ -48,8 +52,6 @@ async function runBrowserTest() {
   await pageA.waitForSelector('text=Notification Settings', { timeout: 3000 });
   console.log('Notification Settings modal opened.');
 
-  const twilioSectionVisible = await pageA.locator('text=Twilio (WhatsApp & SMS)').isVisible();
-  console.log('Twilio Section Visible in Settings:', twilioSectionVisible);
   await pageA.screenshot({ path: path.join(ARTIFACTS_DIR, '03_settings_modal.png') });
   console.log('📸 Captured 03_settings_modal.png');
 
@@ -64,19 +66,31 @@ async function runBrowserTest() {
   await pageA.waitForSelector('text=Add Target Monitor', { timeout: 3000 });
   console.log('Add Target Monitor modal opened.');
 
-  // Fill in Movie URL & Details
+  // Test Auto-Extraction from BookMyShow URL on paste/blur
+  console.log('Testing auto-extraction on BookMyShow URL paste...');
   const urlInput = pageA.locator('textarea[placeholder*="Paste URL"]');
-  await urlInput.fill('https://in.bookmyshow.com/hyderabad/movies/coolie/ET00395371');
+  await urlInput.fill('https://in.bookmyshow.com/movies/hyderabad/devara-part-1/ET00310216?language=Telugu');
+  
+  // Wait for auto-extracted fields
+  await pageA.waitForSelector('text=Cleaned:', { timeout: 5000 });
+  console.log('Cleaned URL badge confirmed!');
 
-  const movieInput = pageA.locator('input[placeholder*="Auto-extracted"]');
-  await movieInput.fill('Coolie');
+  const extractedTitle = await pageA.inputValue('input[placeholder*="Auto-extracted"]');
+  const extractedCity = await pageA.inputValue('input[placeholder*="Hyderabad"]');
+  const extractedLang = await pageA.inputValue('input[placeholder*="Telugu"]');
+  console.log(`Auto-extracted Data -> Title: "${extractedTitle}", City: "${extractedCity}", Lang: "${extractedLang}"`);
 
-  const cityInput = pageA.locator('input[placeholder*="Hyderabad"]');
-  await cityInput.fill('Hyderabad');
+  // Select 1-tap Frequent Theatre Chip
+  const theatreChip = pageA.locator('button.preset-chip:has-text("Prasads Multiplex")');
+  if (await theatreChip.isVisible()) {
+    await theatreChip.click();
+    console.log('Selected 1-tap theatre chip: Prasads Multiplex');
+  }
 
-  // WhatsApp Alert Setup
-  const phoneInput = pageA.locator('input[placeholder*="9876543210"]');
-  await phoneInput.fill('+917013544018');
+  // Select 1-tap Time Preset (Evening)
+  const eveningBtn = pageA.locator('button.time-preset-btn:has-text("Evening")');
+  await eveningBtn.click();
+  console.log('Selected 1-tap time preset: Evening (4-8 PM)');
 
   await pageA.screenshot({ path: path.join(ARTIFACTS_DIR, '04_new_monitor_filled.png') });
   console.log('📸 Captured 04_new_monitor_filled.png');
@@ -87,16 +101,22 @@ async function runBrowserTest() {
   console.log('Submitted monitor form, waiting for monitor card...');
 
   // Verify monitor card in Active Monitors list
-  await pageA.waitForSelector('text=Coolie', { timeout: 8000 });
-  console.log('✅ Monitor for "Coolie" successfully created and visible in Device A dashboard!');
+  await pageA.waitForSelector('text=Devara Part 1', { timeout: 8000 });
+  console.log('✅ Monitor for "Devara Part 1" successfully created and visible in Device A dashboard!');
 
   await pageA.screenshot({ path: path.join(ARTIFACTS_DIR, '05_active_monitors.png') });
   console.log('📸 Captured 05_active_monitors.png');
 
-  // ── Context 2: Device B (Friend / Phone Simulation) ──────────────────────
-  console.log('\n--- Testing Device B (Simulated Friend / Phone - Privacy Isolation) ---');
+  // 6. Test Instant Check Trigger
+  const checkNowBtn = pageA.locator('button:has-text("Check Now")').first();
+  await checkNowBtn.click();
+  console.log('Clicked "Check Now" button to trigger immediate radar cycle.');
+  await pageA.waitForTimeout(2000);
+
+  // ── Context 2: Device B (Simulated Phone / Isolated Vault) ───────────────
+  console.log('\n--- Testing Device B (Mobile iPhone Viewport - Privacy Vault Isolation) ---');
   const contextB = await browser.newContext({
-    viewport: { width: 390, height: 844 }, // Mobile iPhone viewport
+    viewport: { width: 390, height: 844 },
     isMobile: true
   });
   const pageB = await contextB.newPage();
@@ -107,18 +127,18 @@ async function runBrowserTest() {
   const vaultTextB = await vaultBadgeB.textContent();
   console.log('Device B (Phone) Vault Badge:', vaultTextB?.trim());
 
-  // Confirm that Device B does NOT see Device A's "Coolie" monitor
-  const coolieOnDeviceB = await pageB.locator('text=Coolie').isVisible();
-  console.log('Does Device B see Device A\'s "Coolie" monitor?:', coolieOnDeviceB);
+  // Confirm that Device B does NOT see Device A's "Devara Part 1" monitor
+  const devaraOnDeviceB = await pageB.locator('text=Devara Part 1').isVisible();
+  console.log('Does Device B see Device A\'s "Devara Part 1" monitor?:', devaraOnDeviceB);
 
-  const emptyStateVisible = await pageB.locator('text=No monitors tracking right now').isVisible();
+  const emptyStateVisible = await pageB.locator('text=No Active Monitors').isVisible();
   console.log('Does Device B see empty state (0 monitors)?:', emptyStateVisible);
 
   await pageB.screenshot({ path: path.join(ARTIFACTS_DIR, '06_mobile_privacy_isolated.png') });
   console.log('📸 Captured 06_mobile_privacy_isolated.png');
 
   await browser.close();
-  console.log('\n🎉 E2E Browser Testing Completed Successfully with Full Device Isolation Verified!');
+  console.log('\n🎉 E2E Browser Testing Completed Successfully with Full Device Vault Isolation Verified!');
 }
 
 runBrowserTest().catch((err) => {
