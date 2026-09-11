@@ -129,18 +129,26 @@ export default function App() {
     emailFrom: string;
     hasAppPassword: boolean;
     defaultEmailTo: string;
+    twilioSid: string;
+    hasTwilioToken: boolean;
+    twilioFrom: string;
     callmebotKey: string;
     hasCallmebotKey: boolean;
     defaultWhatsappTo: string;
+    hasTwilio: boolean;
     isEmailConfigured: boolean;
     isWhatsappConfigured: boolean;
   }>({
     emailFrom: '',
     hasAppPassword: false,
     defaultEmailTo: '',
+    twilioSid: '',
+    hasTwilioToken: false,
+    twilioFrom: 'whatsapp:+14155238886',
     callmebotKey: '',
     hasCallmebotKey: false,
     defaultWhatsappTo: '',
+    hasTwilio: false,
     isEmailConfigured: false,
     isWhatsappConfigured: false,
   });
@@ -148,6 +156,9 @@ export default function App() {
   const [cfgEmailFrom, setCfgEmailFrom] = useState('');
   const [cfgEmailAppPassword, setCfgEmailAppPassword] = useState('');
   const [cfgDefaultEmailTo, setCfgDefaultEmailTo] = useState('');
+  const [cfgTwilioSid, setCfgTwilioSid] = useState('');
+  const [cfgTwilioToken, setCfgTwilioToken] = useState('');
+  const [cfgTwilioFrom, setCfgTwilioFrom] = useState('whatsapp:+14155238886');
   const [cfgCallmebotKey, setCfgCallmebotKey] = useState('');
   const [cfgDefaultWhatsappTo, setCfgDefaultWhatsappTo] = useState('');
   const [settingsStatus, setSettingsStatus] = useState<string | null>(null);
@@ -191,9 +202,11 @@ export default function App() {
           setNotifConfig(data);
           setCfgEmailFrom(data.emailFrom || '');
           setCfgDefaultEmailTo(data.defaultEmailTo || '');
+          setCfgTwilioSid(data.twilioSid || '');
+          setCfgTwilioFrom(data.twilioFrom || 'whatsapp:+14155238886');
           setCfgCallmebotKey(data.callmebotKey || '');
           setCfgDefaultWhatsappTo(data.defaultWhatsappTo || '');
-          setTestTarget((prev) => prev || data.defaultEmailTo || data.emailFrom || '');
+          setTestTarget((prev) => prev || data.defaultEmailTo || data.emailFrom || data.defaultWhatsappTo || '');
         }
       }
     } catch (err) {
@@ -213,6 +226,9 @@ export default function App() {
           emailFrom: cfgEmailFrom,
           emailAppPassword: cfgEmailAppPassword || undefined,
           defaultEmailTo: cfgDefaultEmailTo,
+          twilioSid: cfgTwilioSid,
+          twilioToken: cfgTwilioToken || undefined,
+          twilioFrom: cfgTwilioFrom,
           callmebotKey: cfgCallmebotKey,
           defaultWhatsappTo: cfgDefaultWhatsappTo,
         }),
@@ -221,6 +237,7 @@ export default function App() {
       if (res.ok) {
         setSettingsStatus('✅ Settings saved successfully!');
         setCfgEmailAppPassword('');
+        setCfgTwilioToken('');
         await fetchSettings();
         setTimeout(() => setSettingsStatus(null), 3500);
       } else {
@@ -1517,55 +1534,106 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Section 2: WhatsApp Settings (CallMeBot) */}
+              {/* Section 2: Twilio Alert Provider (WhatsApp & SMS) */}
               <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--border-subtle)', borderRadius: '10px', padding: '16px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, fontSize: '0.9rem' }}>
-                    <MessageSquare size={16} color="var(--accent-green)" />
-                    <span>WhatsApp Alerts (Free CallMeBot API)</span>
+                    <MessageSquare size={16} color="#f22f46" />
+                    <span>Twilio Alerts (WhatsApp & SMS)</span>
                   </div>
-                  <span style={{ fontSize: '0.72rem', color: notifConfig.isWhatsappConfigured ? '#34d399' : 'var(--text-muted)' }}>
-                    {notifConfig.isWhatsappConfigured ? '✓ Configured' : 'Optional'}
+                  <span style={{ fontSize: '0.72rem', color: notifConfig.hasTwilio ? '#34d399' : 'var(--text-muted)' }}>
+                    {notifConfig.hasTwilio ? '✓ Configured' : '⚠ Missing Credentials'}
                   </span>
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   <div>
                     <label style={{ fontSize: '0.78rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
-                      CallMeBot API Key
+                      Twilio Account SID
                     </label>
                     <input
                       type="text"
                       className="input-field"
-                      placeholder={notifConfig.hasCallmebotKey ? '•••••••• (Saved — leave blank to keep)' : 'Enter CallMeBot API Key'}
-                      value={cfgCallmebotKey}
-                      onChange={(e) => setCfgCallmebotKey(e.target.value)}
+                      placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                      value={cfgTwilioSid}
+                      onChange={(e) => setCfgTwilioSid(e.target.value)}
                     />
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                      Get free key in 30 sec:{' '}
-                      <a
-                        href="https://www.callmebot.com/blog/free-api-whatsapp-messages/"
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{ color: 'var(--accent-green)', textDecoration: 'underline' }}
-                      >
-                        callmebot.com/blog/free-api-whatsapp-messages
-                      </a>
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: '0.78rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
+                      Twilio Auth Token
+                    </label>
+                    <input
+                      type="password"
+                      className="input-field"
+                      placeholder={notifConfig.hasTwilioToken ? '•••••••••••••••• (Saved — leave blank to keep)' : 'Enter Twilio Auth Token'}
+                      value={cfgTwilioToken}
+                      onChange={(e) => setCfgTwilioToken(e.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: '0.78rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
+                      Twilio Sender Number (From)
+                    </label>
+                    <input
+                      type="text"
+                      className="input-field"
+                      placeholder="whatsapp:+14155238886 or +1234567890"
+                      value={cfgTwilioFrom}
+                      onChange={(e) => setCfgTwilioFrom(e.target.value)}
+                    />
+                    <div
+                      style={{
+                        background: 'rgba(242, 47, 70, 0.08)',
+                        border: '1px solid rgba(242, 47, 70, 0.25)',
+                        borderRadius: '8px',
+                        padding: '10px 12px',
+                        fontSize: '0.78rem',
+                        color: '#fca5a5',
+                        lineHeight: 1.5,
+                        marginTop: '6px',
+                      }}
+                    >
+                      📲 <strong>Twilio WhatsApp Sandbox Step:</strong><br />
+                      Twilio Sandbox will block messages until your phone joins the sandbox. Open WhatsApp on your phone and send <code>join nodded-substance</code> to <strong>+1 415 523 8886</strong>. (If you have a different join code in your Twilio Console, send that code).
                     </div>
                   </div>
 
                   <div>
                     <label style={{ fontSize: '0.78rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
-                      Default WhatsApp Phone Number
+                      Default Recipient Phone Number
                     </label>
                     <input
                       type="tel"
                       className="input-field"
-                      placeholder="+91 9876543210"
+                      placeholder="+919876543210"
                       value={cfgDefaultWhatsappTo}
                       onChange={(e) => setCfgDefaultWhatsappTo(e.target.value)}
                     />
                   </div>
+                </div>
+              </div>
+
+              {/* Optional Secondary: CallMeBot Free WhatsApp API */}
+              <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-subtle)', borderRadius: '10px', padding: '14px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                    Alternative Free API: CallMeBot (Optional)
+                  </span>
+                  <span style={{ fontSize: '0.72rem', color: notifConfig.hasCallmebotKey ? '#34d399' : 'var(--text-muted)' }}>
+                    {notifConfig.hasCallmebotKey ? 'Configured' : 'Optional'}
+                  </span>
+                </div>
+                <div>
+                  <input
+                    type="text"
+                    className="input-field"
+                    placeholder={notifConfig.hasCallmebotKey ? '•••••••• (Saved — leave blank to keep)' : 'Enter CallMeBot API Key (optional fallback)'}
+                    value={cfgCallmebotKey}
+                    onChange={(e) => setCfgCallmebotKey(e.target.value)}
+                  />
                 </div>
               </div>
 

@@ -213,7 +213,47 @@ export async function sendWhatsAppAlert(
     `🎟️ *Book Now:* ${url}`,
   ].join('\n');
 
-  // Option 1: CallMeBot Free WhatsApp API (phone + apikey)
+  // ── Primary Provider: Twilio (WhatsApp & SMS) ──────────────────────────────
+  if (cfg.twilioSid && cfg.twilioToken) {
+    try {
+      const client = twilio(cfg.twilioSid, cfg.twilioToken);
+      const fromNumber = cfg.twilioFrom || 'whatsapp:+14155238886';
+      const toNumber = fromNumber.startsWith('whatsapp:')
+        ? (formattedPhone.startsWith('whatsapp:') ? formattedPhone : `whatsapp:${formattedPhone}`)
+        : formattedPhone.replace('whatsapp:', '');
+
+      const msg = await client.messages.create({
+        from: fromNumber,
+        to: toNumber,
+        body: messageBody,
+      });
+
+      // Wait briefly for Twilio sandbox routing confirmation
+      await new Promise((r) => setTimeout(r, 1200));
+      const verified = await client.messages(msg.sid).fetch();
+
+      if (verified.status === 'failed' || verified.status === 'undelivered') {
+        let errDetails = `Twilio delivery ${verified.status} (code: ${verified.errorCode || 'unknown'})`;
+        if (verified.errorCode === 63015 || verified.errorCode === 63007) {
+          errDetails = `Twilio Sandbox Opt-in Required: Your phone number (${toNumber}) has not joined or has expired from the Twilio WhatsApp Sandbox. Please open WhatsApp on your phone and send "join nodded-substance" (or check your sandbox keyword in Twilio Console) to +1 415 523 8886.`;
+        } else if (verified.errorMessage) {
+          errDetails += `: ${verified.errorMessage}`;
+        }
+        console.error(`[Notifier] ${errDetails}`);
+        return { success: false, error: errDetails };
+      }
+
+      console.log(`[Notifier] Alert dispatched via Twilio to ${toNumber} (status: ${verified.status})`);
+      return { success: true };
+    } catch (err: any) {
+      console.error('[Notifier] Twilio dispatch error:', err);
+      if (!cfg.callmebotKey) {
+        return { success: false, error: `Twilio error: ${err.message || String(err)}` };
+      }
+    }
+  }
+
+  // ── Fallback Provider: CallMeBot Free WhatsApp API ──────────────────────────
   if (cfg.callmebotKey) {
     try {
       const encodedMsg = encodeURIComponent(messageBody);
@@ -221,7 +261,7 @@ export async function sendWhatsAppAlert(
       const cmbUrl = `https://api.callmebot.com/whatsapp.php?phone=${cleanPhoneDigits}&text=${encodedMsg}&apikey=${cfg.callmebotKey}`;
       const res = await fetch(cmbUrl);
       if (res.ok) {
-        console.log(`[Notifier] WhatsApp alert sent via CallMeBot to ${formattedPhone}`);
+        console.log(`[Notifier] WhatsApp alert sent via CallMeBot fallback to ${formattedPhone}`);
         return { success: true };
       }
       const text = await res.text();
@@ -232,22 +272,5 @@ export async function sendWhatsAppAlert(
     }
   }
 
-  // Option 2: Twilio WhatsApp API
-  if (cfg.twilioSid && cfg.twilioToken) {
-    try {
-      const client = twilio(cfg.twilioSid, cfg.twilioToken);
-      await client.messages.create({
-        from: cfg.twilioFrom,
-        to: `whatsapp:${formattedPhone}`,
-        body: messageBody,
-      });
-      console.log(`[Notifier] WhatsApp message sent via Twilio to ${formattedPhone}`);
-      return { success: true };
-    } catch (err: any) {
-      console.error('[Notifier] Twilio WhatsApp error:', err);
-      return { success: false, error: err.message };
-    }
-  }
-
-  return { success: false, error: 'No active WhatsApp provider available' };
+  return { success: false, error: 'No active WhatsApp/SMS provider available (configure Twilio in Settings)' };
 }

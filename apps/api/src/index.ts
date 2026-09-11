@@ -22,12 +22,12 @@ const fastify = Fastify({
   },
 });
 
-await fastify.register(cors, {
+fastify.register(cors, {
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 });
 
-await fastify.register(sensible);
+fastify.register(sensible);
 
 // ── Private Vault / Client ID Helper ──────────────────────────────────────────
 export function extractClientId(request: any): string {
@@ -312,9 +312,11 @@ fastify.get('/api/settings/notifications', async () => {
   const smtpHost = map['SMTP_HOST'] || process.env.SMTP_HOST || 'smtp.gmail.com';
   const smtpPort = Number(map['SMTP_PORT'] || process.env.SMTP_PORT) || 587;
 
+  const twilioSid = map['TWILIO_ACCOUNT_SID'] || process.env.TWILIO_ACCOUNT_SID || '';
+  const twilioToken = map['TWILIO_AUTH_TOKEN'] || process.env.TWILIO_AUTH_TOKEN || '';
+  const twilioFrom = map['TWILIO_WHATSAPP_FROM'] || process.env.TWILIO_WHATSAPP_FROM || 'whatsapp:+14155238886';
   const callmebotKey = map['CALLMEBOT_API_KEY'] || process.env.CALLMEBOT_API_KEY || '';
   const defaultWhatsappTo = map['DEFAULT_WHATSAPP_TO'] || process.env.DEFAULT_WHATSAPP_TO || '';
-  const twilioSid = map['TWILIO_ACCOUNT_SID'] || process.env.TWILIO_ACCOUNT_SID || '';
 
   return {
     emailFrom,
@@ -322,12 +324,15 @@ fastify.get('/api/settings/notifications', async () => {
     defaultEmailTo,
     smtpHost,
     smtpPort,
+    twilioSid,
+    hasTwilioToken: Boolean(twilioToken),
+    twilioFrom,
     callmebotKey,
     hasCallmebotKey: Boolean(callmebotKey),
     defaultWhatsappTo,
-    hasTwilio: Boolean(twilioSid),
+    hasTwilio: Boolean(twilioSid && twilioToken),
     isEmailConfigured: Boolean(emailFrom && emailAppPassword),
-    isWhatsappConfigured: Boolean(callmebotKey || twilioSid),
+    isWhatsappConfigured: Boolean(twilioSid && twilioToken),
   };
 });
 
@@ -340,6 +345,9 @@ fastify.post('/api/settings/notifications', async (request, reply) => {
     DEFAULT_EMAIL_TO: body.defaultEmailTo !== undefined ? String(body.defaultEmailTo).trim() : undefined,
     SMTP_HOST: body.smtpHost !== undefined ? String(body.smtpHost).trim() : undefined,
     SMTP_PORT: body.smtpPort !== undefined ? String(body.smtpPort).trim() : undefined,
+    TWILIO_ACCOUNT_SID: body.twilioSid !== undefined ? String(body.twilioSid).trim() : undefined,
+    TWILIO_AUTH_TOKEN: body.twilioToken !== undefined ? String(body.twilioToken).trim() : undefined,
+    TWILIO_WHATSAPP_FROM: body.twilioFrom !== undefined ? String(body.twilioFrom).trim() : undefined,
     CALLMEBOT_API_KEY: body.callmebotKey !== undefined ? String(body.callmebotKey).trim() : undefined,
     DEFAULT_WHATSAPP_TO: body.defaultWhatsappTo !== undefined ? String(body.defaultWhatsappTo).trim() : undefined,
   };
@@ -372,8 +380,9 @@ fastify.post('/api/test-notification', async (request, reply) => {
 
   const emailFrom = map['EMAIL_FROM'] || process.env.EMAIL_FROM || '';
   const emailPass = map['EMAIL_APP_PASSWORD'] || process.env.EMAIL_APP_PASSWORD || '';
-  const callmebotKey = map['CALLMEBOT_API_KEY'] || process.env.CALLMEBOT_API_KEY || '';
   const twilioSid = map['TWILIO_ACCOUNT_SID'] || process.env.TWILIO_ACCOUNT_SID || '';
+  const twilioToken = map['TWILIO_AUTH_TOKEN'] || process.env.TWILIO_AUTH_TOKEN || '';
+  const callmebotKey = map['CALLMEBOT_API_KEY'] || process.env.CALLMEBOT_API_KEY || '';
 
   if (channel === 'EMAIL' && (!emailFrom || !emailPass)) {
     return reply.badRequest(
@@ -381,9 +390,9 @@ fastify.post('/api/test-notification', async (request, reply) => {
     );
   }
 
-  if (channel === 'WHATSAPP' && !callmebotKey && !twilioSid) {
+  if (channel === 'WHATSAPP' && !twilioSid && !callmebotKey) {
     return reply.badRequest(
-      'WhatsApp is not configured! Please provide a CallMeBot API key or Twilio credentials in Notification Settings (⚙️).'
+      'Twilio credentials are not configured! Please provide your Twilio Account SID and Auth Token in Notification Settings (⚙️).'
     );
   }
 
@@ -493,7 +502,7 @@ fastify.get('/api/health', async () => {
 // ── Static Web Serving (Unified Single Port Deployment) ────────────────────────
 const webDistPath = path.resolve(__dirname, '../../web/dist');
 if (fs.existsSync(webDistPath)) {
-  await fastify.register(fastifyStatic, {
+  fastify.register(fastifyStatic, {
     root: webDistPath,
     prefix: '/',
   });
@@ -507,21 +516,26 @@ if (fs.existsSync(webDistPath)) {
 }
 
 // ── Start Server ──────────────────────────────────────────────────────────────
-const PORT = Number(process.env.PORT) || 5055;
-try {
-  await fastify.listen({ port: PORT, host: '0.0.0.0' });
-  fastify.log.info(`BMS API Server listening on port ${PORT}`);
-
-  // Re-sync active monitors with BullMQ on startup
+if (!process.env.VERCEL) {
+  const PORT = Number(process.env.PORT) || 5055;
   try {
-    const activeMonitors = await prisma.monitor.findMany({ where: { status: 'active' } });
-    for (const m of activeMonitors) {
-      await syncRepeatableJob(m);
+    await fastify.listen({ port: PORT, host: '0.0.0.0' });
+    fastify.log.info(`BMS API Server listening on port ${PORT}`);
+
+    // Re-sync active monitors with BullMQ on startup
+    try {
+      const activeMonitors = await prisma.monitor.findMany({ where: { status: 'active' } });
+      for (const m of activeMonitors) {
+        await syncRepeatableJob(m);
+      }
+    } catch (dbErr) {
+      fastify.log.warn(dbErr, 'Could not sync active monitors with BullMQ on startup');
     }
-  } catch (dbErr) {
-    fastify.log.warn(dbErr, 'Could not sync active monitors with BullMQ on startup');
+  } catch (err) {
+    fastify.log.error(err);
+    process.exit(1);
   }
-} catch (err) {
-  fastify.log.error(err);
-  process.exit(1);
 }
+
+export { fastify };
+export default fastify;

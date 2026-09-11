@@ -15,6 +15,10 @@ const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
 export const redis = new Redis(redisUrl, {
   maxRetriesPerRequest: null,
   enableReadyCheck: false,
+  lazyConnect: true,
+});
+redis.on('error', (err) => {
+  // Silent or debug log in serverless
 });
 
 export const bmsPollQueue = new Queue('bms-poll', {
@@ -38,6 +42,9 @@ export const bmsAlertQueue = new Queue('bms-alert', {
   },
 });
 
+const alertEventsRedis = new Redis(redisUrl, { maxRetriesPerRequest: null, enableReadyCheck: false, lazyConnect: true });
+alertEventsRedis.on('error', () => {});
+
 export const bmsAlertEvents = new QueueEvents('bms-alert', {
-  connection: new Redis(redisUrl, { maxRetriesPerRequest: null, enableReadyCheck: false }),
+  connection: alertEventsRedis,
 });
