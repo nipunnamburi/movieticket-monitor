@@ -2,15 +2,20 @@ import { EventEmitter } from 'events';
 import { FastifyReply } from 'fastify';
 import { LiveEventPayload } from '@bms/shared';
 
+interface ClientSubscription {
+  clientId?: string;
+  userId?: string;
+}
+
 class EventHub extends EventEmitter {
-  private clients: Map<FastifyReply, string | undefined> = new Map();
+  private clients: Map<FastifyReply, ClientSubscription> = new Map();
 
   constructor() {
     super();
   }
 
-  addClient(reply: FastifyReply, clientId?: string) {
-    this.clients.set(reply, clientId);
+  addClient(reply: FastifyReply, clientId?: string, userId?: string) {
+    this.clients.set(reply, { clientId, userId });
 
     // Initial heartbeat
     const initial: LiveEventPayload = {
@@ -26,12 +31,14 @@ class EventHub extends EventEmitter {
     });
   }
 
-  broadcast(event: LiveEventPayload) {
+  broadcast(event: LiveEventPayload & { userId?: string }) {
     const payload = `data: ${JSON.stringify(event)}\n\n`;
-    for (const [reply, clientToken] of this.clients.entries()) {
-      // If event is scoped to a client, only deliver to matching client
-      if (event.clientId && clientToken && event.clientId !== clientToken) {
-        continue;
+    for (const [reply, sub] of this.clients.entries()) {
+      // If event has userId and subscriber has userId, match on that
+      if (event.userId && sub.userId) {
+        if (event.userId !== sub.userId) continue;
+      } else if (event.clientId && sub.clientId) {
+        if (event.clientId !== sub.clientId) continue;
       }
       try {
         reply.raw.write(payload);

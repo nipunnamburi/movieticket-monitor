@@ -22,8 +22,19 @@ import {
   Mail,
   MessageSquare,
   AlertTriangle,
+  LogOut,
+  User as UserIcon,
+  Heart,
+  Home,
 } from 'lucide-react';
 import { LiveEventPayload } from '@bms/shared';
+import { LoginPage } from './LoginPage';
+
+interface AuthUser {
+  id: string;
+  email: string;
+  name?: string;
+}
 
 const PRESET_THEATRES = [
   'Asian Lakshmikala Cinepride: Moosapet',
@@ -79,6 +90,17 @@ function getStoredVaultKey(): string {
 }
 
 export default function App() {
+  const [authToken, setAuthToken] = useState<string | null>(() => localStorage.getItem('bms_auth_token'));
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
+    try {
+      const saved = localStorage.getItem('bms_auth_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [isGuest, setIsGuest] = useState<boolean>(() => localStorage.getItem('bms_is_guest') === 'true');
+
   const [vaultKey, setVaultKey] = useState<string>(getStoredVaultKey);
   const [showVaultModal, setShowVaultModal] = useState(false);
   const [syncInputKey, setSyncInputKey] = useState('');
@@ -95,8 +117,31 @@ export default function App() {
   // Authenticated/Vault-Scoped Fetch Helper
   const apiFetch = (url: string, options: RequestInit = {}) => {
     const headers = new Headers(options.headers || {});
+    if (authToken) {
+      headers.set('Authorization', `Bearer ${authToken}`);
+    }
     headers.set('x-vault-key', vaultKey);
     return fetch(url, { ...options, headers });
+  };
+
+  const handleLoginSuccess = (user: AuthUser, token: string) => {
+    localStorage.setItem('bms_auth_token', token);
+    localStorage.setItem('bms_auth_user', JSON.stringify(user));
+    localStorage.removeItem('bms_is_guest');
+    setAuthToken(token);
+    setCurrentUser(user);
+    setIsGuest(false);
+  };
+
+  const handleLogout = () => {
+    if (confirm('Are you sure you want to log out?')) {
+      localStorage.removeItem('bms_auth_token');
+      localStorage.removeItem('bms_auth_user');
+      localStorage.removeItem('bms_is_guest');
+      setAuthToken(null);
+      setCurrentUser(null);
+      setIsGuest(false);
+    }
   };
 
   // Form State
@@ -118,9 +163,41 @@ export default function App() {
   const [whatsappPhone, setWhatsappPhone] = useState('');
   const [isParsing, setIsParsing] = useState(false);
 
+  // User Preferences: Favourites & Nearest Theatre (persisted in localStorage)
+  const [favouriteTheatres, setFavouriteTheatres] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('bms_favourite_theatres');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [nearestTheatre, setNearestTheatre] = useState<string>(() => {
+    return localStorage.getItem('bms_nearest_theatre') || '';
+  });
+
+  // Movie show range dates
+  const [movieFirstDate, setMovieFirstDate] = useState<string>('');
+  const [movieLastDate, setMovieLastDate] = useState<string>('');
+  const [dateOutOfRangeError, setDateOutOfRangeError] = useState<string | null>(null);
+
+  const toggleFavouriteTheatre = (theatre: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setFavouriteTheatres((prev) => {
+      const next = prev.includes(theatre) ? prev.filter((t) => t !== theatre) : [...prev, theatre];
+      localStorage.setItem('bms_favourite_theatres', JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const handleSetNearestTheatre = (theatre: string) => {
+    const next = nearestTheatre === theatre ? '' : theatre;
+    setNearestTheatre(next);
+    localStorage.setItem('bms_nearest_theatre', next);
+  };
+
   // Notification Test state
-  const [testChannel, setTestChannel] = useState<'EMAIL' | 'WHATSAPP'>('EMAIL');
-  const [testTarget, setTestTarget] = useState('');
   const [testStatus, setTestStatus] = useState<string | null>(null);
 
   // Notification Settings State
@@ -206,7 +283,6 @@ export default function App() {
           setCfgTwilioFrom(data.twilioFrom || 'whatsapp:+14155238886');
           setCfgCallmebotKey(data.callmebotKey || '');
           setCfgDefaultWhatsappTo(data.defaultWhatsappTo || '');
-          setTestTarget((prev) => prev || data.defaultEmailTo || data.emailFrom || data.defaultWhatsappTo || '');
         }
       }
     } catch (err) {
@@ -251,11 +327,14 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (!authToken && !isGuest) return;
+
     fetchMonitors();
     fetchTheatres();
     fetchSettings();
 
-    const eventSource = new EventSource(`/api/events?token=${encodeURIComponent(vaultKey)}`);
+    const sseToken = authToken ? `Bearer ${authToken}` : vaultKey;
+    const eventSource = new EventSource(`/api/events?token=${encodeURIComponent(sseToken)}`);
     eventSource.onopen = () => setIsConnected(true);
     eventSource.onerror = () => setIsConnected(false);
 
@@ -298,6 +377,25 @@ export default function App() {
           if (data.date && !selectedDates.includes(data.date)) {
             setSelectedDates((prev) => Array.from(new Set([...prev, data.date])));
           }
+
+          // Compute first and last showing dates from URL or default window (today to +7 days)
+          const today = new Date();
+          const yyyy = today.getFullYear();
+          const mm = String(today.getMonth() + 1).padStart(2, '0');
+          const dd = String(today.getDate()).padStart(2, '0');
+          const todayStr = `${yyyy}-${mm}-${dd}`;
+
+          const maxD = new Date(today);
+          maxD.setDate(maxD.getDate() + 14);
+          const maxY = maxD.getFullYear();
+          const maxM = String(maxD.getMonth() + 1).padStart(2, '0');
+          const maxDay = String(maxD.getDate()).padStart(2, '0');
+          const maxStr = `${maxY}-${maxM}-${maxDay}`;
+
+          const firstD = data.date || todayStr;
+          const lastD = data.date && data.date > maxStr ? data.date : maxStr;
+          setMovieFirstDate(firstD);
+          setMovieLastDate(lastD);
         }
       }
     } catch (err) {
@@ -320,12 +418,13 @@ export default function App() {
     );
   };
 
-  const addCustomTheatre = () => {
-    if (!customTheatreInput.trim()) return;
-    if (!selectedTheatres.includes(customTheatreInput.trim())) {
-      setSelectedTheatres((prev) => [...prev, customTheatreInput.trim()]);
+  const addCustomTheatre = (theatreToAdd?: string) => {
+    const val = (theatreToAdd || customTheatreInput).trim();
+    if (!val) return;
+    if (!selectedTheatres.includes(val)) {
+      setSelectedTheatres((prev) => [...prev, val]);
     }
-    setCustomTheatreInput('');
+    if (!theatreToAdd) setCustomTheatreInput('');
   };
 
   const applyTimePreset = (from: string, to: string, label: string) => {
@@ -340,11 +439,45 @@ export default function App() {
     }
   };
 
+  const handleAddDate = () => {
+    if (!customDateInput) return;
+    setDateOutOfRangeError(null);
+
+    // Validate if movieFirstDate and movieLastDate are set
+    if (movieFirstDate && customDateInput < movieFirstDate) {
+      setDateOutOfRangeError(`⚠️ Cannot add ${customDateInput}: Movie is not showing before ${movieFirstDate}`);
+      return;
+    }
+    if (movieLastDate && customDateInput > movieLastDate) {
+      setDateOutOfRangeError(`⚠️ Cannot add ${customDateInput}: Movie run finishes by ${movieLastDate}. Showtimes are not available after this date.`);
+      return;
+    }
+
+    if (!selectedDates.includes(customDateInput)) {
+      setSelectedDates((prev) => [...prev, customDateInput]);
+      setCustomDateInput('');
+    }
+  };
+
   const handleCreateMonitor = async (e: React.FormEvent) => {
     e.preventDefault();
+    setDateOutOfRangeError(null);
     if (!newUrl) {
       alert('Please provide or extract a valid BookMyShow URL.');
       return;
+    }
+
+    // Check that all selectedDates fall within [movieFirstDate, movieLastDate]
+    if (movieFirstDate || movieLastDate) {
+      const invalid = selectedDates.filter((d) => {
+        if (movieFirstDate && d < movieFirstDate) return true;
+        if (movieLastDate && d > movieLastDate) return true;
+        return false;
+      });
+      if (invalid.length > 0) {
+        setDateOutOfRangeError(`⚠️ Cannot schedule monitor: Dates [${invalid.join(', ')}] are out of movie screening range (${movieFirstDate || 'start'} to ${movieLastDate || 'end'}).`);
+        return;
+      }
     }
 
     try {
@@ -406,9 +539,10 @@ export default function App() {
     fetchMonitors();
   };
 
-  const handleSendTestAlert = async () => {
-    if (!testTarget) {
-      setTestStatus('❌ Please enter a recipient email or phone');
+  const handleSendTestAlert = async (overrideTarget?: string) => {
+    const target = overrideTarget || currentUser?.email || '';
+    if (!target) {
+      setTestStatus('❌ Please sign in or provide a recipient address');
       setTimeout(() => setTestStatus(null), 4000);
       return;
     }
@@ -417,11 +551,11 @@ export default function App() {
       const res = await apiFetch('/api/test-notification', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channel: testChannel, target: testTarget }),
+        body: JSON.stringify({ channel: 'EMAIL', target }),
       });
       const data = await safeJson(res);
       if (res.ok) {
-        setTestStatus(data?.message || '✅ Sent successfully!');
+        setTestStatus(data?.message || `✅ Sample alert delivered to ${target}!`);
       } else {
         setTestStatus(`❌ ${data?.message || `Failed to send alert (HTTP ${res.status})`}`);
       }
@@ -430,6 +564,19 @@ export default function App() {
     }
     setTimeout(() => setTestStatus(null), 8000);
   };
+
+  // Check if unauthenticated
+  if (!authToken && !isGuest) {
+    return (
+      <LoginPage
+        onLoginSuccess={handleLoginSuccess}
+        onContinueAsGuest={() => {
+          localStorage.setItem('bms_is_guest', 'true');
+          setIsGuest(true);
+        }}
+      />
+    );
+  }
 
   return (
     <div style={{ maxWidth: '1280px', margin: '0 auto', padding: '24px 20px 80px' }}>
@@ -521,6 +668,64 @@ export default function App() {
           <button className="btn btn-primary" onClick={() => setShowAddModal(true)}>
             <Plus size={16} /> New Monitor
           </button>
+
+          {/* User Profile / Logout Button */}
+          {currentUser ? (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                background: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-md)',
+                padding: '4px 6px 4px 12px',
+              }}
+            >
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#ffffff', lineHeight: 1.2 }}>
+                  {currentUser.name || currentUser.email.split('@')[0]}
+                </span>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', lineHeight: 1.2 }}>
+                  {currentUser.email}
+                </span>
+              </div>
+              <button
+                className="btn"
+                onClick={handleLogout}
+                style={{
+                  background: 'rgba(239, 68, 68, 0.12)',
+                  color: '#f87171',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  padding: '6px 10px',
+                  borderRadius: '8px',
+                  fontSize: '0.8rem',
+                  gap: '4px',
+                }}
+                title="Log out from BookMyShow Monitor"
+              >
+                <LogOut size={14} />
+                <span>Logout</span>
+              </button>
+            </div>
+          ) : (
+            <button
+              className="btn btn-secondary"
+              onClick={() => {
+                localStorage.removeItem('bms_is_guest');
+                setIsGuest(false);
+              }}
+              style={{
+                gap: '6px',
+                border: '1px solid rgba(229, 9, 20, 0.4)',
+                color: 'var(--text-primary)',
+              }}
+              title="Sign in with an account"
+            >
+              <UserIcon size={15} color="var(--bms-red)" />
+              <span>Sign In</span>
+            </button>
+          )}
         </div>
       </header>
 
@@ -649,20 +854,31 @@ export default function App() {
                   {/* Filter tags */}
                   {(m.filterTheatres.length > 0 || m.filterDates.length > 0) && (
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '12px' }}>
-                      {m.filterTheatres.map((t) => (
-                        <span
-                          key={t}
-                          style={{
-                            background: 'rgba(255,255,255,0.06)',
-                            padding: '3px 8px',
-                            borderRadius: '4px',
-                            fontSize: '0.75rem',
-                            color: 'var(--text-secondary)',
-                          }}
-                        >
-                          🏛️ {t}
-                        </span>
-                      ))}
+                      {m.filterTheatres.map((t) => {
+                        const isFav = favouriteTheatres.includes(t);
+                        const isNearest = nearestTheatre === t;
+                        return (
+                          <span
+                            key={t}
+                            style={{
+                              background: 'rgba(255,255,255,0.06)',
+                              border: isFav ? '1px solid rgba(229, 9, 20, 0.4)' : isNearest ? '1px solid rgba(56, 189, 248, 0.4)' : '1px solid var(--border-subtle)',
+                              padding: '3px 8px',
+                              borderRadius: '4px',
+                              fontSize: '0.75rem',
+                              color: 'var(--text-secondary)',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                            }}
+                            title={isFav && isNearest ? 'Favourite & Nearest Theatre' : isFav ? 'Favourite Theatre' : isNearest ? 'Nearest to Home' : undefined}
+                          >
+                            {isFav && <Heart size={11} color="#e50914" fill="#e50914" />}
+                            {isNearest && <Home size={11} color="#38bdf8" />}
+                            <span>🏛️ {t}</span>
+                          </span>
+                        );
+                      })}
                       {m.filterDates.map((d) => (
                         <span
                           key={d}
@@ -709,21 +925,78 @@ export default function App() {
                       <Bell size={14} />
                       <span>{m.alerts.length} ticket alerts recorded (View History)</span>
                     </button>
-                    <a
-                      href={m.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                        color: 'var(--bms-red)',
-                        textDecoration: 'none',
-                        fontWeight: 600,
-                      }}
-                    >
-                      BMS Show Page <ExternalLink size={12} />
-                    </a>
+                    {/* Booking Link / Date Window Check */}
+                    {(() => {
+                      const todayStr = new Date().toISOString().slice(0, 10);
+                      const dates = m.filterDates.length > 0 ? [...m.filterDates].sort() : [];
+                      const firstDate = dates[0] || '';
+                      const lastDate = dates[dates.length - 1] || '';
+
+                      const isBeforeRun = firstDate && todayStr < firstDate;
+                      const isAfterRun = lastDate && todayStr > lastDate;
+
+                      if (isBeforeRun) {
+                        return (
+                          <div
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              background: 'rgba(245, 158, 11, 0.12)',
+                              border: '1px solid rgba(245, 158, 11, 0.3)',
+                              padding: '4px 10px',
+                              borderRadius: '6px',
+                              fontSize: '0.74rem',
+                              color: '#fbbf24',
+                              fontWeight: 600,
+                            }}
+                            title={`Screenings start on ${firstDate}. Booking opens when showtimes commence.`}
+                          >
+                            <span>⏳ Shows Start {firstDate} (Pre-Release)</span>
+                          </div>
+                        );
+                      }
+
+                      if (isAfterRun) {
+                        return (
+                          <div
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              background: 'rgba(239, 68, 68, 0.12)',
+                              border: '1px solid rgba(239, 68, 68, 0.3)',
+                              padding: '4px 10px',
+                              borderRadius: '6px',
+                              fontSize: '0.74rem',
+                              color: '#f87171',
+                              fontWeight: 600,
+                            }}
+                            title={`Screenings ended on ${lastDate}. Bookings are closed.`}
+                          >
+                            <span>⛔ Show Run Ended ({lastDate})</span>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <a
+                          href={m.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            color: 'var(--bms-red)',
+                            textDecoration: 'none',
+                            fontWeight: 600,
+                          }}
+                        >
+                          BMS Show Page <ExternalLink size={12} />
+                        </a>
+                      );
+                    })()}
                   </div>
                 </div>
               ))}
@@ -794,11 +1067,11 @@ export default function App() {
             </div>
           </div>
 
-          {/* Quick Notification Dispatch Tester */}
+          {/* Account & Direct Alert Destination Card */}
           <div className="glass-card" style={{ padding: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-              <h3 style={{ fontSize: '0.95rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <Send size={16} color="var(--bms-red)" /> Test Notification Channels
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+              <h3 style={{ fontSize: '0.95rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <UserIcon size={16} color="var(--accent-cyan)" /> Account & Direct Alerts
               </h3>
               <button
                 onClick={() => {
@@ -821,134 +1094,78 @@ export default function App() {
               </button>
             </div>
 
-            {/* Channel Status Indicator */}
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '6px 10px',
-                borderRadius: '6px',
-                background: 'rgba(255, 255, 255, 0.03)',
-                marginBottom: '10px',
-                fontSize: '0.75rem',
-              }}
-            >
-              <span style={{ color: 'var(--text-muted)' }}>Status:</span>
-              {testChannel === 'EMAIL' ? (
-                notifConfig.isEmailConfigured ? (
-                  <span style={{ color: '#34d399', fontWeight: 600 }}>🟢 Gmail SMTP Ready</span>
-                ) : (
-                  <button
-                    onClick={() => setShowSettingsModal(true)}
-                    style={{
-                      color: '#f87171',
-                      background: 'none',
-                      border: 'none',
-                      cursor: 'pointer',
-                      textDecoration: 'underline',
-                      padding: 0,
-                      fontSize: '0.75rem',
-                    }}
-                  >
-                    🔴 Email Not Configured (Click to set up)
-                  </button>
-                )
-              ) : notifConfig.isWhatsappConfigured ? (
-                <span style={{ color: '#34d399', fontWeight: 600 }}>🟢 WhatsApp Ready</span>
-              ) : (
-                <button
-                  onClick={() => setShowSettingsModal(true)}
-                  style={{
-                    color: '#f87171',
-                    background: 'none',
-                    border: 'none',
-                    cursor: 'pointer',
-                    textDecoration: 'underline',
-                    padding: 0,
-                    fontSize: '0.75rem',
-                  }}
-                >
-                  🔴 WhatsApp Not Configured (Click to set up)
-                </button>
-              )}
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  type="button"
-                  className={`btn ${testChannel === 'EMAIL' ? 'btn-primary' : 'btn-secondary'}`}
-                  style={{ flex: 1, padding: '6px' }}
-                  onClick={() => {
-                    setTestChannel('EMAIL');
-                    if (!testTarget || testTarget.includes('+')) {
-                      setTestTarget(notifConfig.defaultEmailTo || notifConfig.emailFrom || '');
-                    }
-                  }}
-                >
-                  ✉️ Email
-                </button>
-                <button
-                  type="button"
-                  className={`btn ${testChannel === 'WHATSAPP' ? 'btn-primary' : 'btn-secondary'}`}
-                  style={{ flex: 1, padding: '6px' }}
-                  onClick={() => {
-                    setTestChannel('WHATSAPP');
-                    if (!testTarget || testTarget.includes('@')) {
-                      setTestTarget(notifConfig.defaultWhatsappTo || '');
-                    }
-                  }}
-                >
-                  💬 WhatsApp
-                </button>
-              </div>
-
-              <input
-                className="input-field"
-                placeholder={testChannel === 'EMAIL' ? 'recipient@gmail.com' : '+91 9876543210'}
-                value={testTarget}
-                onChange={(e) => setTestTarget(e.target.value)}
-              />
-
-              <button className="btn btn-secondary" onClick={handleSendTestAlert} style={{ width: '100%' }}>
-                <Send size={14} /> Send Sample Alert
-              </button>
-
-              {testStatus && (
+            {currentUser ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 <div
                   style={{
-                    fontSize: '0.78rem',
-                    textAlign: 'center',
-                    marginTop: '4px',
-                    padding: '6px 8px',
-                    borderRadius: '6px',
-                    background: testStatus.startsWith('✅') ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                    color: testStatus.startsWith('✅') ? '#34d399' : '#fca5a5',
-                    wordBreak: 'break-word',
+                    background: 'rgba(16, 185, 129, 0.08)',
+                    border: '1px solid rgba(16, 185, 129, 0.25)',
+                    borderRadius: '10px',
+                    padding: '12px 14px',
                   }}
                 >
-                  {testStatus}
-                  {testStatus.includes('not configured') && (
-                    <div style={{ marginTop: '4px' }}>
-                      <button
-                        onClick={() => setShowSettingsModal(true)}
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          color: '#38bdf8',
-                          cursor: 'pointer',
-                          textDecoration: 'underline',
-                          fontSize: '0.75rem',
-                        }}
-                      >
-                        Open Notification Settings →
-                      </button>
-                    </div>
-                  )}
+                  <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                    Authenticated Account Email:
+                  </div>
+                  <div style={{ fontSize: '0.92rem', fontWeight: 700, color: '#34d399', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Mail size={15} /> {currentUser.email}
+                  </div>
                 </div>
-              )}
-            </div>
+
+                <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                  🎯 <strong>Zero manual email input required:</strong> When tickets open up for any tracked movie, real-time alerts are routed directly to <strong>{currentUser.email}</strong>.
+                </div>
+
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => handleSendTestAlert(currentUser.email)}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    fontSize: '0.82rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                  }}
+                >
+                  <Send size={14} /> Send Sample Alert to My Email
+                </button>
+
+                {testStatus && (
+                  <div
+                    style={{
+                      fontSize: '0.78rem',
+                      textAlign: 'center',
+                      marginTop: '4px',
+                      padding: '6px 8px',
+                      borderRadius: '6px',
+                      background: testStatus.startsWith('✅') ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                      color: testStatus.startsWith('✅') ? '#34d399' : '#fca5a5',
+                      wordBreak: 'break-word',
+                    }}
+                  >
+                    {testStatus}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ textAlign: 'center', padding: '12px 6px' }}>
+                <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginBottom: '14px' }}>
+                  Sign in or create an account with your email to have movie ticket alerts automatically dispatched to your inbox.
+                </p>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => {
+                    localStorage.removeItem('bms_is_guest');
+                    setIsGuest(false);
+                  }}
+                  style={{ width: '100%', padding: '10px' }}
+                >
+                  <UserIcon size={14} /> Sign In / Create Account
+                </button>
+              </div>
+            )}
           </div>
         </section>
       </div>
@@ -1077,28 +1294,145 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 1-Tap Frequent Theatre Chips */}
+              {/* 🏢 Frequent Theatre Filters with Top 3 Quick Access & Dropdown */}
               <div>
-                <label style={{ fontSize: '0.8rem', fontWeight: 600, display: 'block', marginBottom: '6px' }}>
-                  🏢 Frequent Theatre Filters (1-Tap Selection)
-                </label>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
-                  {theatreSuggestions.slice(0, 8).map((theatre) => {
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <label style={{ fontSize: '0.8rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    🏢 Frequent Theatres <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>(Top 3 Quick Access)</span>
+                  </label>
+                  {nearestTheatre && (
+                    <span style={{ fontSize: '0.72rem', color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <Home size={12} /> Nearest: <strong>{nearestTheatre.split(':')[0]}</strong>
+                    </span>
+                  )}
+                </div>
+
+                {/* Top 3 Quick Access Chips */}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' }}>
+                  {theatreSuggestions.slice(0, 3).map((theatre) => {
                     const isSelected = selectedTheatres.includes(theatre);
+                    const isFav = favouriteTheatres.includes(theatre);
+                    const isNearest = nearestTheatre === theatre;
                     const shortName = theatre.split(':')[0] || theatre;
                     return (
-                      <button
+                      <div
                         key={theatre}
-                        type="button"
-                        className={`preset-chip ${isSelected ? 'active' : ''}`}
-                        onClick={() => toggleTheatrePreset(theatre)}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          borderRadius: '8px',
+                          border: isSelected ? '1px solid var(--bms-red)' : '1px solid var(--border-subtle)',
+                          background: isSelected ? 'rgba(229, 9, 20, 0.18)' : 'rgba(255, 255, 255, 0.04)',
+                          padding: '3px 8px',
+                          gap: '6px',
+                        }}
                       >
-                        {isSelected ? '✓' : '＋'} {shortName}
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleTheatrePreset(theatre)}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            color: isSelected ? '#ffffff' : 'var(--text-secondary)',
+                            fontSize: '0.8rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            padding: 0,
+                          }}
+                        >
+                          <span>{isSelected ? '✓' : '＋'}</span>
+                          <span>{shortName}</span>
+                        </button>
+
+                        {/* Favorite Heart Toggle */}
+                        <button
+                          type="button"
+                          onClick={(e) => toggleFavouriteTheatre(theatre, e)}
+                          title={isFav ? 'Favorited Theatre (Click to unfavorite)' : 'Mark as Favourite'}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            cursor: 'pointer',
+                            padding: '2px',
+                            display: 'flex',
+                            alignItems: 'center',
+                          }}
+                        >
+                          <Heart
+                            size={13}
+                            color={isFav ? '#e50914' : 'var(--text-muted)'}
+                            fill={isFav ? '#e50914' : 'none'}
+                          />
+                        </button>
+
+                        {/* Nearest to Home Badge / Toggle */}
+                        <button
+                          type="button"
+                          onClick={() => handleSetNearestTheatre(theatre)}
+                          title={isNearest ? 'Nearest to Home (Click to unset)' : 'Set as Nearest to Home'}
+                          style={{
+                            background: isNearest ? 'rgba(56, 189, 248, 0.2)' : 'transparent',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            padding: '2px 4px',
+                            display: 'flex',
+                            alignItems: 'center',
+                          }}
+                        >
+                          <Home
+                            size={12}
+                            color={isNearest ? '#38bdf8' : 'var(--text-muted)'}
+                          />
+                        </button>
+                      </div>
                     );
                   })}
                 </div>
 
+                {/* Dropdown Menu for All / Additional Theatres */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '8px', marginBottom: '8px' }}>
+                  <select
+                    className="input-field"
+                    defaultValue=""
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        addCustomTheatre(e.target.value);
+                        e.target.value = '';
+                      }
+                    }}
+                    style={{ fontSize: '0.82rem' }}
+                  >
+                    <option value="" disabled>
+                      ▼ Select theatre from dropdown menu...
+                    </option>
+                    {favouriteTheatres.length > 0 && (
+                      <optgroup label="❤️ Your Favourite Theatres">
+                        {favouriteTheatres.map((t) => (
+                          <option key={`fav-${t}`} value={t}>
+                            ❤️ {t}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    <optgroup label="🏢 All Theatres">
+                      {theatreSuggestions.map((t) => {
+                        const isFav = favouriteTheatres.includes(t);
+                        const isNearest = nearestTheatre === t;
+                        return (
+                          <option key={t} value={t}>
+                            {isFav ? '❤️ ' : ''}{isNearest ? '🏠 [Nearest] ' : ''}{t}
+                          </option>
+                        );
+                      })}
+                    </optgroup>
+                  </select>
+                </div>
+
+                {/* Custom Theatre Input Fallback */}
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <input
                     className="input-field"
@@ -1118,57 +1452,104 @@ export default function App() {
                       <option key={t} value={t} />
                     ))}
                   </datalist>
-                  <button type="button" className="btn btn-secondary" onClick={addCustomTheatre}>
+                  <button type="button" className="btn btn-secondary" onClick={() => addCustomTheatre()}>
                     Add
                   </button>
                 </div>
+
+                {/* Selected Theatres Chips */}
                 {selectedTheatres.length > 0 && (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '6px' }}>
-                    {selectedTheatres.map((t) => (
-                      <span
-                        key={t}
-                        style={{
-                          background: 'rgba(229, 9, 20, 0.15)',
-                          border: '1px solid var(--bms-red)',
-                          padding: '2px 8px',
-                          borderRadius: '4px',
-                          fontSize: '0.72rem',
-                          color: '#fff',
-                        }}
-                      >
-                        {t} ✕
-                      </span>
-                    ))}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
+                    {selectedTheatres.map((t) => {
+                      const isFav = favouriteTheatres.includes(t);
+                      const isNearest = nearestTheatre === t;
+                      return (
+                        <span
+                          key={t}
+                          style={{
+                            background: 'rgba(229, 9, 20, 0.15)',
+                            border: '1px solid var(--bms-red)',
+                            padding: '3px 8px',
+                            borderRadius: '6px',
+                            fontSize: '0.74rem',
+                            color: '#fff',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                          }}
+                        >
+                          {isFav && <Heart size={11} color="#e50914" fill="#e50914" />}
+                          {isNearest && <Home size={11} color="#38bdf8" />}
+                          <span>{t}</span>
+                          <span
+                            onClick={() => setSelectedTheatres((prev) => prev.filter((item) => item !== t))}
+                            style={{ cursor: 'pointer', marginLeft: '2px', color: '#f87171' }}
+                            title="Remove"
+                          >
+                            ✕
+                          </span>
+                        </span>
+                      );
+                    })}
                   </div>
                 )}
               </div>
 
-              {/* 📅 Date Filter Option */}
+              {/* 📅 Date Filter Option with Screening Range Enforcement */}
               <div>
-                <label style={{ fontSize: '0.8rem', fontWeight: 600, display: 'block', marginBottom: '6px' }}>
-                  📅 Target Dates (Optional: alerts for specific days)
-                </label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <label style={{ fontSize: '0.8rem', fontWeight: 600 }}>
+                    📅 Target Show Dates
+                  </label>
+                  {(movieFirstDate || movieLastDate) && (
+                    <span style={{ fontSize: '0.72rem', color: '#34d399', fontWeight: 600 }}>
+                      🎞️ Showing: {movieFirstDate || 'Current'} → {movieLastDate || 'Open'}
+                    </span>
+                  )}
+                </div>
+
+                {/* Date range error warning */}
+                {dateOutOfRangeError && (
+                  <div
+                    style={{
+                      background: 'rgba(239, 68, 68, 0.12)',
+                      border: '1px solid rgba(239, 68, 68, 0.35)',
+                      borderRadius: '8px',
+                      padding: '8px 12px',
+                      fontSize: '0.78rem',
+                      color: '#f87171',
+                      marginBottom: '8px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                    }}
+                  >
+                    <span>{dateOutOfRangeError}</span>
+                  </div>
+                )}
+
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <input
                     type="date"
                     className="input-field"
                     value={customDateInput}
-                    onChange={(e) => setCustomDateInput(e.target.value)}
+                    min={movieFirstDate || undefined}
+                    max={movieLastDate || undefined}
+                    onChange={(e) => {
+                      setCustomDateInput(e.target.value);
+                      setDateOutOfRangeError(null);
+                    }}
                     style={{ colorScheme: 'dark' }}
                   />
                   <button
                     type="button"
                     className="btn btn-secondary"
-                    onClick={() => {
-                      if (customDateInput && !selectedDates.includes(customDateInput)) {
-                        setSelectedDates((prev) => [...prev, customDateInput]);
-                        setCustomDateInput('');
-                      }
-                    }}
+                    onClick={handleAddDate}
                   >
                     Add Date
                   </button>
                 </div>
+
                 {selectedDates.length > 0 && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '6px' }}>
                     {selectedDates.map((d) => (
@@ -1277,20 +1658,39 @@ export default function App() {
                 </select>
               </div>
 
-              {/* Alert Channels: Email & WhatsApp */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                <div>
-                  <label style={{ fontSize: '0.8rem', fontWeight: 600, display: 'block', marginBottom: '6px' }}>
-                    ✉️ Alert Email (optional)
-                  </label>
-                  <input
-                    type="email"
-                    className="input-field"
-                    placeholder="e.g. alerts@gmail.com"
-                    value={emailTo}
-                    onChange={(e) => setEmailTo(e.target.value)}
-                  />
-                </div>
+              {/* Alert Channels: Automated Email & WhatsApp */}
+              <div style={{ display: 'grid', gridTemplateColumns: currentUser ? '1.2fr 1fr' : '1fr 1fr', gap: '12px' }}>
+                {currentUser ? (
+                  <div
+                    style={{
+                      background: 'rgba(56, 189, 248, 0.08)',
+                      border: '1px solid rgba(56, 189, 248, 0.25)',
+                      borderRadius: '8px',
+                      padding: '10px 14px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>✉️ Alert Destination (Automatic):</span>
+                    <span style={{ fontSize: '0.86rem', fontWeight: 700, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '6px', marginTop: '3px' }}>
+                      <Mail size={14} /> {currentUser.email}
+                    </span>
+                  </div>
+                ) : (
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 600, display: 'block', marginBottom: '6px' }}>
+                      ✉️ Alert Email (optional)
+                    </label>
+                    <input
+                      type="email"
+                      className="input-field"
+                      placeholder="e.g. alerts@gmail.com"
+                      value={emailTo}
+                      onChange={(e) => setEmailTo(e.target.value)}
+                    />
+                  </div>
+                )}
                 <div>
                   <label style={{ fontSize: '0.8rem', fontWeight: 600, display: 'block', marginBottom: '6px' }}>
                     💬 WhatsApp Number (optional)
@@ -1635,6 +2035,39 @@ export default function App() {
                     onChange={(e) => setCfgCallmebotKey(e.target.value)}
                   />
                 </div>
+              </div>
+
+              {/* Section 3: Nearest Theatre to Home Preferences */}
+              <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--border-subtle)', borderRadius: '10px', padding: '16px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, fontSize: '0.9rem' }}>
+                    <Home size={16} color="#38bdf8" />
+                    <span>Nearest Theatre to Home</span>
+                  </div>
+                  {nearestTheatre && (
+                    <span style={{ fontSize: '0.72rem', color: '#34d399', fontWeight: 600 }}>
+                      ✓ Set: {nearestTheatre.split(':')[0]}
+                    </span>
+                  )}
+                </div>
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '10px' }}>
+                  Set your closest local theatre to highlight it with a home badge and prioritize ticket drops closest to your location.
+                </p>
+                <select
+                  className="input-field"
+                  value={nearestTheatre}
+                  onChange={(e) => {
+                    handleSetNearestTheatre(e.target.value);
+                  }}
+                  style={{ fontSize: '0.84rem' }}
+                >
+                  <option value="">-- None Selected (Click to choose your nearest theatre) --</option>
+                  {theatreSuggestions.map((t) => (
+                    <option key={`setting-nearest-${t}`} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               {settingsStatus && (

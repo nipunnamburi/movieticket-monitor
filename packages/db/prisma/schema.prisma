@@ -7,9 +7,21 @@ generator client {
   provider = "prisma-client-js"
 }
 
+model User {
+  id        String    @id @default(cuid())
+  email     String    @unique
+  password  String
+  name      String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  monitors  Monitor[]
+}
+
 model Monitor {
   id                String     @id @default(cuid())
   clientId          String     @default("default")
+  userId            String?
+  user              User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
   name              String
   url               String
   city              String
@@ -30,6 +42,7 @@ model Monitor {
   updatedAt         DateTime   @updatedAt
 
   @@index([clientId])
+  @@index([userId])
   @@index([status])
 }
 
