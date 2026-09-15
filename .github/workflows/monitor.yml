@@ -16,6 +16,13 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+      EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
+      DEFAULT_EMAIL_TO: ${{ secrets.DEFAULT_EMAIL_TO }}
+      CALLMEBOT_API_KEY: ${{ secrets.CALLMEBOT_API_KEY }}
+      DEFAULT_WHATSAPP_TO: ${{ secrets.DEFAULT_WHATSAPP_TO }}
 
     steps:
       - name: Checkout Repository
@@ -33,16 +40,22 @@ jobs:
       - name: Generate Prisma Client
         run: npm run db:generate
 
+      - name: Cache Playwright Binaries
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
       - name: Install Playwright Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install chromium --with-deps
+
+      - name: Install Playwright System Dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
 
       - name: Run BookMyShow Cloud Scraper Cycle
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
-          EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
-          DEFAULT_EMAIL_TO: ${{ secrets.DEFAULT_EMAIL_TO }}
-          CALLMEBOT_API_KEY: ${{ secrets.CALLMEBOT_API_KEY }}
-          DEFAULT_WHATSAPP_TO: ${{ secrets.DEFAULT_WHATSAPP_TO }}
           MONITOR_ID: ${{ github.event.inputs.monitor_id }}
         run: npm run runner

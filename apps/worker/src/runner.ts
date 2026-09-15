@@ -3,7 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { prisma } from '@bms/db';
 import { computeDiff, extractOpenings, SnapshotShows } from '@bms/shared';
-import { fetchBmsShows } from './scraper.js';
+import { fetchBmsShows, closeBrowser } from './scraper.js';
 import { sendEmailAlert, sendWhatsAppAlert } from './notifiers.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -75,78 +75,100 @@ export async function runAllChecks(targetMonitorId?: string) {
   const startTime = Date.now();
   console.log(`[CloudRunner] Initializing BookMyShow 24/7 cloud check...`);
 
-  const monitors = await prisma.monitor.findMany({
-    where: {
-      status: 'active',
-      ...(targetMonitorId ? { id: targetMonitorId } : {}),
-    },
-  });
-
-  console.log(`[CloudRunner] Found ${monitors.length} active monitor(s) to scan.`);
-
-  for (const monitor of monitors) {
-    console.log(`\n======================================================`);
-    console.log(`[CloudRunner] Scanning: "${monitor.name}" (${monitor.city})`);
-    console.log(`  URL: ${monitor.url}`);
-
-    const { shows, error } = await fetchBmsShows(monitor.url, monitor.filterDates);
-
-    if (error) {
-      console.error(`  ❌ Scraper error: ${error}`);
-      await prisma.monitor.update({
-        where: { id: monitor.id },
-        data: {
-          lastChecked: new Date(),
-          lastError: error,
-        },
-      });
-      continue;
+  const dbUrl = (process.env.DATABASE_URL || '').trim();
+  const isCi = !!process.env.GITHUB_ACTIONS || !process.env.PORT;
+  if (!dbUrl || (isCi && (dbUrl.includes('localhost') || dbUrl.includes('127.0.0.1')))) {
+    console.error(`\n❌ [CloudRunner] CRITICAL DATABASE CONFIGURATION ERROR:`);
+    if (!dbUrl) {
+      console.error(`   The "DATABASE_URL" secret is NOT set in GitHub Repository Secrets.`);
+    } else {
+      console.error(`   The "DATABASE_URL" is set to localhost (${dbUrl}), which is unreachable in GitHub cloud runner.`);
     }
+    console.error(`   Please provide your cloud PostgreSQL connection string (Neon, Supabase, or Railway):`);
+    console.error(`   GitHub Repo -> Settings -> Secrets and variables -> Actions -> "DATABASE_URL"\n`);
+    throw new Error('Valid cloud DATABASE_URL is required for 24/7 cloud monitoring.');
+  }
 
-    const oldSnapshot = (monitor.snapshot as SnapshotShows) || {};
-    const hasOldSnapshot = Object.keys(oldSnapshot).length > 0;
-
-    const filteredNewShows = applyFilters(shows, monitor);
-    const filteredOldShows = applyFilters(oldSnapshot, monitor);
-
-    const rawDiffs = computeDiff(filteredOldShows, filteredNewShows);
-    const openings = hasOldSnapshot ? extractOpenings(rawDiffs) : [];
-
-    await prisma.monitor.update({
-      where: { id: monitor.id },
-      data: {
-        lastChecked: new Date(),
-        lastError: null,
-        snapshot: shows as any,
+  try {
+    const monitors = await prisma.monitor.findMany({
+      where: {
+        status: 'active',
+        ...(targetMonitorId ? { id: targetMonitorId } : {}),
       },
     });
 
-    console.log(`  Scanned successfully. Extracted ${Object.keys(shows).length} date(s). Openings detected: ${openings.length}`);
+    console.log(`[CloudRunner] Found ${monitors.length} active monitor(s) to scan.`);
 
-    if (openings.length > 0) {
-      console.log(`  🎉 ALERT! Found ${openings.length} ticket opening(s)! Dispatching alerts...`);
+    for (const monitor of monitors) {
+      console.log(`\n======================================================`);
+      console.log(`[CloudRunner] Scanning: "${monitor.name}" (${monitor.city})`);
+      console.log(`  URL: ${monitor.url}`);
+
+      const { shows, error } = await fetchBmsShows(monitor.url, monitor.filterDates);
+
+      if (error) {
+        console.error(`  ❌ Scraper error: ${error}`);
+        await prisma.monitor.update({
+          where: { id: monitor.id },
+          data: {
+            lastChecked: new Date(),
+            lastError: error,
+          },
+        });
+        continue;
+      }
+
+      const oldSnapshot = (monitor.snapshot as SnapshotShows) || {};
+      const hasOldSnapshot = Object.keys(oldSnapshot).length > 0;
+
+      const filteredNewShows = applyFilters(shows, monitor);
+      const filteredOldShows = applyFilters(oldSnapshot, monitor);
+
+      const diff = computeDiff(filteredOldShows, filteredNewShows);
+      const openings = extractOpenings(diff);
+
+      console.log(`  Filtered shows: ${Object.keys(filteredNewShows).length} dates.`);
+      console.log(`  Availability openings detected: ${openings.length}`);
+
+      await prisma.monitor.update({
+        where: { id: monitor.id },
+        data: {
+          snapshot: shows as any,
+          lastChecked: new Date(),
+          lastError: null,
+        },
+      });
+
+      if (!hasOldSnapshot) {
+        console.log(`  ℹ️ First scan baseline saved. No alerts sent.`);
+        continue;
+      }
+
+      if (openings.length === 0) {
+        console.log(`  No new ticket openings found.`);
+        continue;
+      }
+
+      console.log(`  🚨 NEW TICKETS FOUND! Sending alerts for ${openings.length} opening(s)...`);
 
       const channelsUsed: string[] = [];
-
-      // 1. Email Alert
-      const targetEmail = monitor.emailTo || process.env.DEFAULT_EMAIL_TO || process.env.EMAIL_FROM;
-      if (targetEmail) {
-        const res = await sendEmailAlert(targetEmail, monitor.name, monitor.city, monitor.url, openings);
+      const emailTarget = monitor.emailTo || process.env.DEFAULT_EMAIL_TO || process.env.EMAIL_FROM;
+      if (emailTarget) {
+        const res = await sendEmailAlert(emailTarget, monitor.name, monitor.city, monitor.url, openings);
         if (res.success) {
-          channelsUsed.push('EMAIL');
-          console.log(`  ✉️ Email alert sent to: ${targetEmail}`);
+          channelsUsed.push(`email:${emailTarget}`);
+          console.log(`  ✅ Email alert sent to ${emailTarget}`);
         } else {
           console.warn(`  ⚠️ Email alert failed: ${res.error}`);
         }
       }
 
-      // 2. WhatsApp Alert
-      const targetWhatsApp = monitor.whatsappPhone || process.env.DEFAULT_WHATSAPP_TO;
-      if (targetWhatsApp) {
-        const res = await sendWhatsAppAlert(targetWhatsApp, monitor.name, monitor.city, monitor.url, openings);
+      const waTarget = monitor.whatsappPhone || process.env.DEFAULT_WHATSAPP_TO;
+      if (waTarget) {
+        const res = await sendWhatsAppAlert(waTarget, monitor.name, monitor.city, monitor.url, openings);
         if (res.success) {
-          channelsUsed.push('WHATSAPP');
-          console.log(`  💬 WhatsApp alert sent to: ${targetWhatsApp}`);
+          channelsUsed.push(`whatsapp:${waTarget}`);
+          console.log(`  ✅ WhatsApp alert sent to ${waTarget}`);
         } else {
           console.warn(`  ⚠️ WhatsApp alert failed: ${res.error}`);
         }
@@ -160,10 +182,12 @@ export async function runAllChecks(targetMonitorId?: string) {
         },
       });
     }
-  }
 
-  const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-  console.log(`\n[CloudRunner] Finished scanning all monitors in ${duration}s.`);
+    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`\n[CloudRunner] Finished scanning all monitors in ${duration}s.`);
+  } finally {
+    await closeBrowser();
+  }
 }
 
 // CLI Execution entry

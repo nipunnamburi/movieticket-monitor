@@ -227,8 +227,8 @@ export async function fetchBmsShows(
         await page.waitForTimeout(3500);
 
         if (!capturedByDate[dc]) {
-          const stateData = await page.evaluate(() => {
-            const st = (window as any).__INITIAL_STATE__ || (window as any).__NEXT_DATA__;
+          const stateData = await page.evaluate(`(() => {
+            const st = window.__INITIAL_STATE__ || window.__NEXT_DATA__;
             if (!st) return null;
 
             // Check queries in showtimesFunctionalApi
@@ -240,21 +240,21 @@ export async function fetchBmsShows(
               }
             }
 
-            // Recursive widget finder
-            function findWidgets(obj: any, depth = 0): any {
-              if (!obj || depth > 6) return null;
-              if (obj.showtimeWidgets && Array.isArray(obj.showtimeWidgets)) return obj;
-              for (const k in obj) {
-                if (typeof obj[k] === 'object' && obj[k] !== null) {
-                  const res = findWidgets(obj[k], depth + 1);
-                  if (res) return res;
+            // Breadth-first widget finder
+            const queue = [{ obj: st, depth: 0 }];
+            while (queue.length > 0) {
+              const item = queue.shift();
+              if (!item || !item.obj || item.depth > 6) continue;
+              if (item.obj.showtimeWidgets && Array.isArray(item.obj.showtimeWidgets)) return item.obj;
+              for (const k in item.obj) {
+                if (typeof item.obj[k] === 'object' && item.obj[k] !== null) {
+                  queue.push({ obj: item.obj[k], depth: item.depth + 1 });
                 }
               }
-              return null;
             }
 
-            return findWidgets(st);
-          });
+            return null;
+          })()`);
 
           if (stateData) {
             capturedByDate[dc] = stateData;
@@ -280,5 +280,16 @@ export async function fetchBmsShows(
   } catch (err: any) {
     console.error(`[Scraper] Scrape process exception: ${err.message}`);
     return { shows: {}, error: err.message };
+  }
+}
+
+export async function closeBrowser(): Promise<void> {
+  if (sharedBrowser) {
+    try {
+      await sharedBrowser.close();
+    } catch {
+      // ignore
+    }
+    sharedBrowser = null;
   }
 }
