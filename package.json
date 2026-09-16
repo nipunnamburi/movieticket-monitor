@@ -14,15 +14,19 @@
     "dev": "concurrently \"npm:dev:api\" \"npm:dev:worker\" \"npm:dev:web\"",
     "build": "npm run db:generate && npm run build --workspaces --if-present",
     "start": "concurrently \"npm run start --workspace=apps/api\" \"npm run start --workspace=apps/worker\"",
-    "runner": "tsx apps/worker/src/runner.ts",
+    "runner": "tsx --env-file=.env apps/worker/src/runner.ts",
     "db:generate": "prisma generate --schema=packages/db/prisma/schema.prisma",
     "db:push": "prisma db push --schema=packages/db/prisma/schema.prisma",
     "test": "npm run test --workspaces --if-present"
   },
+  "overrides": {
+    "esbuild": "0.25.12"
+  },
   "devDependencies": {
-    "@esbuild/darwin-arm64": "^0.25.12",
+    "@esbuild/darwin-arm64": "0.25.12",
     "@rollup/rollup-darwin-arm64": "^4.63.3",
     "concurrently": "^9.1.2",
+    "esbuild": "0.25.12",
     "prisma": "^5.22.0",
     "typescript": "^5.7.3",
     "vitest": "^5.0.1"

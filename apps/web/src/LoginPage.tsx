@@ -55,10 +55,16 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onContinue
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
+      let data: any = {};
+      try {
+        const text = await res.text();
+        if (text) data = JSON.parse(text);
+      } catch {
+        // Fallback for non-JSON responses
+      }
 
       if (!res.ok) {
-        throw new Error(data.message || (isSignUp ? 'Registration failed' : 'Invalid email or password'));
+        throw new Error(data.message || data.error || (isSignUp ? 'Registration failed' : 'Invalid email or password'));
       }
 
       setSuccessMessage(isSignUp ? 'Account created successfully! Logging you in...' : 'Logged in successfully!');
