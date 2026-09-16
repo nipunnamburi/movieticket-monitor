@@ -16,7 +16,13 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
 const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
-const redis = new Redis(redisUrl, { maxRetriesPerRequest: null });
+const isTls = redisUrl.startsWith('rediss://');
+const redis = new Redis(redisUrl, {
+  maxRetriesPerRequest: null,
+  enableReadyCheck: false,
+  lazyConnect: true,
+  ...(isTls ? { tls: { rejectUnauthorized: false } } : {}),
+});
 
 const API_PORT = process.env.PORT || 5055;
 const BROADCAST_URL = `http://localhost:${API_PORT}/api/events/broadcast`;

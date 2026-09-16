@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import twilio from 'twilio';
+import { Resend } from 'resend';
 import { ShowOpening } from '@bms/shared';
 import { prisma } from '@bms/db';
 import dotenv from 'dotenv';
@@ -12,6 +13,8 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
 export interface NotificationConfig {
+  resendApiKey: string;
+  resendFrom: string;
   emailFrom: string;
   emailAppPassword: string;
   defaultEmailTo: string;
@@ -37,6 +40,9 @@ export async function getNotificationConfig(): Promise<NotificationConfig> {
     console.warn('[Notifier] Could not load system settings from DB:', err);
   }
 
+  const resendApiKey = settingsMap['RESEND_API_KEY'] || process.env.RESEND_API_KEY || '';
+  const resendFrom = settingsMap['RESEND_FROM'] || process.env.RESEND_FROM || 'BookMyShow Alerts <onboarding@resend.dev>';
+
   const emailFrom = settingsMap['EMAIL_FROM'] || process.env.EMAIL_FROM || '';
   const emailAppPassword = (settingsMap['EMAIL_APP_PASSWORD'] || process.env.EMAIL_APP_PASSWORD || '').replace(/\s+/g, '');
   const defaultEmailTo = settingsMap['DEFAULT_EMAIL_TO'] || process.env.DEFAULT_EMAIL_TO || emailFrom;
@@ -50,6 +56,8 @@ export async function getNotificationConfig(): Promise<NotificationConfig> {
   const defaultWhatsappTo = settingsMap['DEFAULT_WHATSAPP_TO'] || process.env.DEFAULT_WHATSAPP_TO || '';
 
   return {
+    resendApiKey,
+    resendFrom,
     emailFrom,
     emailAppPassword,
     defaultEmailTo,
@@ -60,12 +68,12 @@ export async function getNotificationConfig(): Promise<NotificationConfig> {
     twilioFrom,
     callmebotKey,
     defaultWhatsappTo,
-    isEmailConfigured: Boolean(emailFrom && emailAppPassword),
+    isEmailConfigured: Boolean(resendApiKey || (emailFrom && emailAppPassword)),
     isWhatsappConfigured: Boolean(callmebotKey || (twilioSid && twilioToken)),
   };
 }
 
-// ── Email Notifier (Gmail / SMTP) ─────────────────────────────────────────────
+// ── Email Notifier (Resend / Gmail SMTP) ──────────────────────────────────────
 export async function sendEmailAlert(
   recipientEmail: string,
   monitorName: string,
@@ -76,8 +84,8 @@ export async function sendEmailAlert(
   const cfg = await getNotificationConfig();
   const to = recipientEmail || cfg.defaultEmailTo || cfg.emailFrom;
 
-  if (!cfg.emailFrom || !cfg.emailAppPassword) {
-    const msg = 'Email sender credentials (EMAIL_FROM, EMAIL_APP_PASSWORD) not configured';
+  if (!cfg.resendApiKey && (!cfg.emailFrom || !cfg.emailAppPassword)) {
+    const msg = 'No email credentials configured (requires RESEND_API_KEY or EMAIL_FROM + EMAIL_APP_PASSWORD)';
     console.warn(`[Notifier] ${msg}`);
     return { success: false, error: msg };
   }
@@ -86,16 +94,6 @@ export async function sendEmailAlert(
     console.warn(`[Notifier] ${msg}`);
     return { success: false, error: msg };
   }
-
-  const transporter = nodemailer.createTransport({
-    host: cfg.smtpHost,
-    port: cfg.smtpPort,
-    secure: cfg.smtpPort === 465,
-    auth: {
-      user: cfg.emailFrom,
-      pass: cfg.emailAppPassword,
-    },
-  });
 
   const subject = `🔔 BMS Alert: ${monitorName} (${city}) — ${openings.length} Show(s) Bookable Now!`;
 
@@ -163,17 +161,53 @@ export async function sendEmailAlert(
     </html>
   `;
 
+  // 1. Primary: Resend Service API
+  if (cfg.resendApiKey) {
+    try {
+      const resend = new Resend(cfg.resendApiKey);
+      const from = cfg.resendFrom || 'BookMyShow Alerts <onboarding@resend.dev>';
+      const result = await resend.emails.send({
+        from,
+        to: [to],
+        subject,
+        html,
+      });
+
+      if (result.error) {
+        console.error('[Notifier] Resend API error:', result.error);
+        return { success: false, error: result.error.message || 'Resend delivery failed' };
+      }
+
+      console.log(`[Notifier] Email alert delivered via Resend to ${to} (id: ${result.data?.id})`);
+      return { success: true };
+    } catch (err: any) {
+      console.error('[Notifier] Resend dispatch exception:', err);
+      return { success: false, error: err.message || String(err) };
+    }
+  }
+
+  // 2. Fallback: Nodemailer SMTP (Gmail / Custom SMTP)
   try {
+    const transporter = nodemailer.createTransport({
+      host: cfg.smtpHost,
+      port: cfg.smtpPort,
+      secure: cfg.smtpPort === 465,
+      auth: {
+        user: cfg.emailFrom,
+        pass: cfg.emailAppPassword,
+      },
+    });
+
     await transporter.sendMail({
       from: `"BookMyShow Monitor" <${cfg.emailFrom}>`,
       to,
       subject,
       html,
     });
-    console.log(`[Notifier] Email alert delivered to ${to}`);
+    console.log(`[Notifier] Email alert delivered via SMTP to ${to}`);
     return { success: true };
   } catch (err: any) {
-    console.error('[Notifier] Email dispatch error:', err);
+    console.error('[Notifier] SMTP dispatch error:', err);
     return { success: false, error: err.message || String(err) };
   }
 }

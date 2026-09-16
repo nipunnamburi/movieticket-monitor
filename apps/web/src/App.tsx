@@ -203,6 +203,9 @@ export default function App() {
   // Notification Settings State
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [notifConfig, setNotifConfig] = useState<{
+    resendApiKey?: string;
+    hasResendKey: boolean;
+    resendFrom: string;
     emailFrom: string;
     hasAppPassword: boolean;
     defaultEmailTo: string;
@@ -216,6 +219,8 @@ export default function App() {
     isEmailConfigured: boolean;
     isWhatsappConfigured: boolean;
   }>({
+    hasResendKey: false,
+    resendFrom: 'BookMyShow Alerts <onboarding@resend.dev>',
     emailFrom: '',
     hasAppPassword: false,
     defaultEmailTo: '',
@@ -230,6 +235,8 @@ export default function App() {
     isWhatsappConfigured: false,
   });
 
+  const [cfgResendApiKey, setCfgResendApiKey] = useState('');
+  const [cfgResendFrom, setCfgResendFrom] = useState('BookMyShow Alerts <onboarding@resend.dev>');
   const [cfgEmailFrom, setCfgEmailFrom] = useState('');
   const [cfgEmailAppPassword, setCfgEmailAppPassword] = useState('');
   const [cfgDefaultEmailTo, setCfgDefaultEmailTo] = useState('');
@@ -277,6 +284,7 @@ export default function App() {
         const data = await safeJson(res);
         if (data) {
           setNotifConfig(data);
+          setCfgResendFrom(data.resendFrom || 'BookMyShow Alerts <onboarding@resend.dev>');
           setCfgEmailFrom(data.emailFrom || '');
           setCfgDefaultEmailTo(data.defaultEmailTo || '');
           setCfgTwilioSid(data.twilioSid || '');
@@ -299,6 +307,8 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          resendApiKey: cfgResendApiKey || undefined,
+          resendFrom: cfgResendFrom || undefined,
           emailFrom: cfgEmailFrom,
           emailAppPassword: cfgEmailAppPassword || undefined,
           defaultEmailTo: cfgDefaultEmailTo,
@@ -312,6 +322,7 @@ export default function App() {
       const data = await safeJson(res);
       if (res.ok) {
         setSettingsStatus('✅ Settings saved successfully!');
+        setCfgResendApiKey('');
         setCfgEmailAppPassword('');
         setCfgTwilioToken('');
         await fetchSettings();
@@ -1868,12 +1879,12 @@ export default function App() {
             </p>
 
             <form onSubmit={handleSaveSettings} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {/* Section 1: Email Credentials */}
+              {/* Section 1: Email Alert Provider (Resend or Gmail SMTP) */}
               <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--border-subtle)', borderRadius: '10px', padding: '16px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, fontSize: '0.9rem' }}>
                     <Mail size={16} color="var(--accent-cyan)" />
-                    <span>Gmail SMTP Alert Sender</span>
+                    <span>Email Alert Service (Resend / Gmail)</span>
                   </div>
                   <span style={{ fontSize: '0.72rem', color: notifConfig.isEmailConfigured ? '#34d399' : '#f87171' }}>
                     {notifConfig.isEmailConfigured ? '✓ Configured' : '⚠ Missing Credentials'}
@@ -1881,41 +1892,74 @@ export default function App() {
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {/* Resend Option */}
                   <div>
                     <label style={{ fontSize: '0.78rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
-                      Sender Gmail Address *
-                    </label>
-                    <input
-                      type="email"
-                      className="input-field"
-                      placeholder="e.g. youraccount@gmail.com"
-                      required
-                      value={cfgEmailFrom}
-                      onChange={(e) => setCfgEmailFrom(e.target.value)}
-                    />
-                  </div>
-
-                  <div>
-                    <label style={{ fontSize: '0.78rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
-                      Google 16-Character App Password *
+                      Resend API Key (Recommended)
                     </label>
                     <input
                       type="password"
                       className="input-field"
-                      placeholder={notifConfig.hasAppPassword ? '•••••••••••••••• (Saved — leave blank to keep)' : 'xxxx xxxx xxxx xxxx'}
-                      value={cfgEmailAppPassword}
-                      onChange={(e) => setCfgEmailAppPassword(e.target.value)}
+                      placeholder={notifConfig.hasResendKey ? '•••••••• (Saved — leave blank to keep)' : 're_xxxxxxxxxxxxxxxxxxxx'}
+                      value={cfgResendApiKey}
+                      onChange={(e) => setCfgResendApiKey(e.target.value)}
                     />
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                      Generate at:{' '}
+                      Get your API key at:{' '}
                       <a
-                        href="https://myaccount.google.com/apppasswords"
+                        href="https://resend.com/api-keys"
                         target="_blank"
                         rel="noreferrer"
                         style={{ color: 'var(--accent-cyan)', textDecoration: 'underline' }}
                       >
-                        myaccount.google.com/apppasswords
+                        resend.com/api-keys
                       </a>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: '0.78rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
+                      Resend Sender Address
+                    </label>
+                    <input
+                      type="text"
+                      className="input-field"
+                      placeholder="BookMyShow Alerts <onboarding@resend.dev>"
+                      value={cfgResendFrom}
+                      onChange={(e) => setCfgResendFrom(e.target.value)}
+                    />
+                  </div>
+
+                  {/* Gmail SMTP Option */}
+                  <div style={{ borderTop: '1px dashed var(--border-subtle)', paddingTop: '10px', marginTop: '4px' }}>
+                    <div style={{ fontSize: '0.76rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '8px' }}>
+                      — Or use Gmail SMTP:
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                      <div>
+                        <label style={{ fontSize: '0.74rem', fontWeight: 500, display: 'block', marginBottom: '4px' }}>
+                          Gmail Address
+                        </label>
+                        <input
+                          type="email"
+                          className="input-field"
+                          placeholder="youraccount@gmail.com"
+                          value={cfgEmailFrom}
+                          onChange={(e) => setCfgEmailFrom(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '0.74rem', fontWeight: 500, display: 'block', marginBottom: '4px' }}>
+                          Google App Password
+                        </label>
+                        <input
+                          type="password"
+                          className="input-field"
+                          placeholder={notifConfig.hasAppPassword ? '•••••••• (Saved)' : 'xxxx xxxx xxxx xxxx'}
+                          value={cfgEmailAppPassword}
+                          onChange={(e) => setCfgEmailAppPassword(e.target.value)}
+                        />
+                      </div>
                     </div>
                   </div>
 

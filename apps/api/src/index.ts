@@ -75,19 +75,25 @@ export function extractClientId(request: any): string {
 
 // ── SSE Stream Endpoint ───────────────────────────────────────────────────────
 fastify.get('/api/events', async (request, reply) => {
+  reply.hijack();
   const session = extractAuthSession(request);
-  const clientId = session.userId || session.clientId;
+
   reply.raw.writeHead(200, {
     'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
+    'Cache-Control': 'no-cache, no-transform',
     'Connection': 'keep-alive',
     'Access-Control-Allow-Origin': '*',
+    'X-Accel-Buffering': 'no',
   });
 
   eventHub.addClient(reply, session.clientId, session.userId);
 
-  // Keep connection open
-  await new Promise(() => {});
+  return new Promise<void>((resolve) => {
+    request.raw.on('close', () => {
+      eventHub.removeClient(reply);
+      resolve();
+    });
+  });
 });
 
 // ── Broadcast Event Endpoint (Used by Worker) ─────────────────────────────────
@@ -464,6 +470,8 @@ fastify.get('/api/settings/notifications', async () => {
     map[s.key] = s.value;
   }
 
+  const resendApiKey = map['RESEND_API_KEY'] || process.env.RESEND_API_KEY || '';
+  const resendFrom = map['RESEND_FROM'] || process.env.RESEND_FROM || 'BookMyShow Alerts <onboarding@resend.dev>';
   const emailFrom = map['EMAIL_FROM'] || process.env.EMAIL_FROM || '';
   const emailAppPassword = map['EMAIL_APP_PASSWORD'] || process.env.EMAIL_APP_PASSWORD || '';
   const defaultEmailTo = map['DEFAULT_EMAIL_TO'] || process.env.DEFAULT_EMAIL_TO || emailFrom;
@@ -477,6 +485,9 @@ fastify.get('/api/settings/notifications', async () => {
   const defaultWhatsappTo = map['DEFAULT_WHATSAPP_TO'] || process.env.DEFAULT_WHATSAPP_TO || '';
 
   return {
+    resendApiKey: resendApiKey ? '••••••••' : '',
+    hasResendKey: Boolean(resendApiKey),
+    resendFrom,
     emailFrom,
     hasAppPassword: Boolean(emailAppPassword),
     defaultEmailTo,
@@ -489,8 +500,8 @@ fastify.get('/api/settings/notifications', async () => {
     hasCallmebotKey: Boolean(callmebotKey),
     defaultWhatsappTo,
     hasTwilio: Boolean(twilioSid && twilioToken),
-    isEmailConfigured: Boolean(emailFrom && emailAppPassword),
-    isWhatsappConfigured: Boolean(twilioSid && twilioToken),
+    isEmailConfigured: Boolean(resendApiKey || (emailFrom && emailAppPassword)),
+    isWhatsappConfigured: Boolean(callmebotKey || (twilioSid && twilioToken)),
   };
 });
 
@@ -498,6 +509,8 @@ fastify.post('/api/settings/notifications', async (request, reply) => {
   const body = (request.body as any) || {};
 
   const keysToUpdate: Record<string, string | undefined> = {
+    RESEND_API_KEY: body.resendApiKey !== undefined ? String(body.resendApiKey).trim() : undefined,
+    RESEND_FROM: body.resendFrom !== undefined ? String(body.resendFrom).trim() : undefined,
     EMAIL_FROM: body.emailFrom !== undefined ? String(body.emailFrom).trim() : undefined,
     EMAIL_APP_PASSWORD: body.emailAppPassword !== undefined ? String(body.emailAppPassword).trim().replace(/\s+/g, '') : undefined,
     DEFAULT_EMAIL_TO: body.defaultEmailTo !== undefined ? String(body.defaultEmailTo).trim() : undefined,
@@ -540,15 +553,15 @@ fastify.post('/api/test-notification', async (request, reply) => {
   const map: Record<string, string> = {};
   for (const s of dbSettings) map[s.key] = s.value;
 
+  const resendApiKey = map['RESEND_API_KEY'] || process.env.RESEND_API_KEY || '';
   const emailFrom = map['EMAIL_FROM'] || process.env.EMAIL_FROM || '';
   const emailPass = map['EMAIL_APP_PASSWORD'] || process.env.EMAIL_APP_PASSWORD || '';
   const twilioSid = map['TWILIO_ACCOUNT_SID'] || process.env.TWILIO_ACCOUNT_SID || '';
-  const twilioToken = map['TWILIO_AUTH_TOKEN'] || process.env.TWILIO_AUTH_TOKEN || '';
   const callmebotKey = map['CALLMEBOT_API_KEY'] || process.env.CALLMEBOT_API_KEY || '';
 
-  if (channel === 'EMAIL' && (!emailFrom || !emailPass)) {
+  if (channel === 'EMAIL' && !resendApiKey && (!emailFrom || !emailPass)) {
     return reply.badRequest(
-      'Gmail SMTP is not configured! Please configure your Gmail address and 16-character App Password in Notification Settings (⚙️) first.'
+      'Email service is not configured! Please configure your Resend API Key or Gmail credentials in Notification Settings (⚙️) first.'
     );
   }
 

@@ -9,26 +9,64 @@ interface ClientSubscription {
 
 class EventHub extends EventEmitter {
   private clients: Map<FastifyReply, ClientSubscription> = new Map();
+  private heartbeatTimer: NodeJS.Timeout | null = null;
 
   constructor() {
     super();
+    this.startHeartbeat();
+  }
+
+  private startHeartbeat() {
+    if (this.heartbeatTimer) return;
+    this.heartbeatTimer = setInterval(() => {
+      if (this.clients.size === 0) return;
+      const ping = `: ping - ${new Date().toISOString()}\n\n`;
+      for (const [reply] of this.clients.entries()) {
+        try {
+          reply.raw.write(ping);
+        } catch {
+          this.removeClient(reply);
+        }
+      }
+    }, 15000);
   }
 
   addClient(reply: FastifyReply, clientId?: string, userId?: string) {
     this.clients.set(reply, { clientId, userId });
 
-    // Initial heartbeat
+    // Initial heartbeat payload
     const initial: LiveEventPayload = {
       type: 'HEARTBEAT',
       clientId,
       timestamp: new Date().toISOString(),
       message: 'Connected to private BMS Monitor SSE stream',
     };
-    reply.raw.write(`data: ${JSON.stringify(initial)}\n\n`);
+
+    try {
+      reply.raw.write(`data: ${JSON.stringify(initial)}\n\n`);
+    } catch {
+      this.removeClient(reply);
+      return;
+    }
 
     reply.raw.on('close', () => {
-      this.clients.delete(reply);
+      this.removeClient(reply);
     });
+
+    reply.raw.on('error', () => {
+      this.removeClient(reply);
+    });
+  }
+
+  removeClient(reply: FastifyReply) {
+    this.clients.delete(reply);
+    try {
+      if (!reply.raw.destroyed) {
+        reply.raw.end();
+      }
+    } catch {
+      // ignore
+    }
   }
 
   broadcast(event: LiveEventPayload & { userId?: string }) {
@@ -43,7 +81,7 @@ class EventHub extends EventEmitter {
       try {
         reply.raw.write(payload);
       } catch {
-        this.clients.delete(reply);
+        this.removeClient(reply);
       }
     }
   }

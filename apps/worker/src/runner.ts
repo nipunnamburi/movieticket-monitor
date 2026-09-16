@@ -187,6 +187,11 @@ export async function runAllChecks(targetMonitorId?: string) {
     console.log(`\n[CloudRunner] Finished scanning all monitors in ${duration}s.`);
   } finally {
     await closeBrowser();
+    try {
+      await prisma.$disconnect();
+    } catch {
+      // ignore
+    }
   }
 }
 

@@ -1,7 +1,8 @@
-import { chromium, Browser } from 'playwright';
+import { chromium, Browser, BrowserContext } from 'playwright';
 import { SnapshotShows } from '@bms/shared';
 
 let sharedBrowser: Browser | null = null;
+let launchPromise: Promise<Browser> | null = null;
 
 const STEALTH_SCRIPT = `
   Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
@@ -11,18 +12,36 @@ const STEALTH_SCRIPT = `
 `;
 
 async function getBrowser(): Promise<Browser> {
-  if (!sharedBrowser || !sharedBrowser.isConnected()) {
-    sharedBrowser = await chromium.launch({
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-blink-features=AutomationControlled',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-      ],
-    });
+  if (sharedBrowser && sharedBrowser.isConnected()) {
+    return sharedBrowser;
   }
-  return sharedBrowser;
+
+  if (launchPromise) {
+    return launchPromise;
+  }
+
+  launchPromise = (async () => {
+    try {
+      const browser = await chromium.launch({
+        headless: true,
+        args: [
+          '--no-sandbox',
+          '--disable-blink-features=AutomationControlled',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+        ],
+      });
+      sharedBrowser = browser;
+      browser.on('disconnected', () => {
+        sharedBrowser = null;
+      });
+      return browser;
+    } finally {
+      launchPromise = null;
+    }
+  })();
+
+  return launchPromise;
 }
 
 export function getDateCodes(url: string, filterDates?: string[]): string[] {
@@ -185,10 +204,11 @@ export async function fetchBmsShows(
 ): Promise<{ shows: SnapshotShows; error?: string }> {
   const dateCodes = getDateCodes(url, filterDates);
   const allShows: SnapshotShows = {};
+  let context: BrowserContext | null = null;
 
   try {
     const browser = await getBrowser();
-    const context = await browser.newContext({
+    context = await browser.newContext({
       userAgent:
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
       viewport: { width: 1366, height: 768 },
@@ -275,11 +295,18 @@ export async function fetchBmsShows(
       }
     }
 
-    await context.close();
     return { shows: allShows };
   } catch (err: any) {
     console.error(`[Scraper] Scrape process exception: ${err.message}`);
     return { shows: {}, error: err.message };
+  } finally {
+    if (context) {
+      try {
+        await context.close();
+      } catch {
+        // ignore
+      }
+    }
   }
 }
 

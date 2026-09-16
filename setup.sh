@@ -1,44 +1,61 @@
 #!/usr/bin/env bash
-# setup.sh — One-time setup for BMS Monitor web app.
+# setup.sh — One-time setup for BookMyShow Live Monitor Monorepo
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "──────────────────────────────────────────"
-echo " BookMyShow Monitor — Setup"
+echo " 🎬 BookMyShow Live Monitor — Setup"
 echo "──────────────────────────────────────────"
 
-if ! command -v python3 &>/dev/null; then
-  echo "❌  python3 not found. Install from https://python.org"
+if ! command -v node &>/dev/null; then
+  echo "❌  Node.js not found. Please install Node.js (v20+) from https://nodejs.org"
   exit 1
 fi
-PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-echo "✅  Python $PY_VER"
+
+NODE_VER=$(node -v)
+echo "✅  Node.js $NODE_VER"
+
+if [ ! -f .env ]; then
+  if [ -f .env.example ]; then
+    echo "📄  Creating .env from .env.example..."
+    cp .env.example .env
+  fi
+fi
 
 echo ""
-echo "📦  Installing Python dependencies …"
-python3 -m pip install --upgrade pip --quiet
-python3 -m pip install -r requirements.txt --quiet
-echo "✅  Dependencies installed (Flask, APScheduler, Playwright, PyYAML)"
+echo "📦  Installing monorepo dependencies..."
+npm install
 
 echo ""
-echo "🌐  Installing Playwright Chromium browser …"
-python3 -m playwright install chromium
-echo "✅  Chromium installed"
+echo "🌐  Installing Playwright Chromium browser..."
+npx playwright install chromium
+
+echo ""
+echo "🗄️   Generating Prisma Database Client..."
+npm run db:generate
+
+echo ""
+echo "🏗️   Building packages & React Web Dashboard..."
+npm run build
+
+echo ""
+echo "🧪  Running validation test suite..."
+npm test
 
 echo ""
 echo "──────────────────────────────────────────"
-echo " Setup complete! Next steps:"
+echo " ✅ Setup complete! Choose how to run:"
 echo ""
-echo "  1. Start the web app:"
-echo "     python3 app.py"
+echo "  Option A (Local Development):"
+echo "     npm run dev"
+echo "     (Open http://localhost:5055 or Vite dev on http://localhost:5173)"
 echo ""
-echo "  2. Open your browser at:"
-echo "     http://localhost:5055"
+echo "  Option B (Production Docker Compose):"
+echo "     docker compose up -d --build"
+echo "     (Open http://localhost:5055)"
 echo ""
-echo "  3. Click '⚙ Email Config' in the top-right to set up Gmail."
-echo "     (App Password: https://myaccount.google.com/apppasswords)"
-echo ""
-echo "  4. Paste the BookMyShow URL and click 'Start Monitoring'."
+echo "  Option C (24/7 Cloud Background Check):"
+echo "     npm run runner"
 echo "──────────────────────────────────────────"
