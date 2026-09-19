@@ -1,4 +1,4 @@
-import { chromium, Browser, BrowserContext } from 'playwright';
+import { chromium, type Browser, type BrowserContext } from 'playwright';
 import { SnapshotShows } from '@bms/shared';
 
 let sharedBrowser: Browser | null = null;
@@ -45,8 +45,8 @@ async function getBrowser(): Promise<Browser> {
 }
 
 export function getDateCodes(url: string, filterDates?: string[]): string[] {
-  // 1. Extract date from buytickets URL if present
-  const m = url.match(/\/buytickets\/ET\d{8}\/(\d{8})/i) || url.match(/[?&]date=(\d{8})/i);
+  // 1. Extract date from buytickets URL or path/query if present
+  const m = url.match(/(?:\/|date=)(\d{8})(?:[/?#&]|$)/i);
   if (m) {
     return [m[1]];
   }

@@ -363,7 +363,7 @@ export default function App() {
     };
 
     return () => eventSource.close();
-  }, [vaultKey]);
+  }, [vaultKey, authToken, isGuest]);
 
   // BMS URL Clean & Extraction feature
   const handleExtractUrl = async (textToClean?: string) => {

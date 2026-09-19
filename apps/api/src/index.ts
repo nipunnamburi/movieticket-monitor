@@ -412,11 +412,21 @@ fastify.post('/api/monitors', async (request, reply) => {
   return monitor;
 });
 
+function isMonitorAuthorized(monitor: { userId?: string | null; clientId?: string | null }, session: AuthContext): boolean {
+  if (session.userId) {
+    return monitor.userId === session.userId || monitor.clientId === session.userId;
+  }
+  if (session.clientId) {
+    return monitor.clientId === session.clientId;
+  }
+  return false;
+}
+
 fastify.patch('/api/monitors/:id', async (request, reply) => {
   const { id } = request.params as { id: string };
-  const clientId = extractClientId(request);
+  const session = extractAuthSession(request);
   const existing = await prisma.monitor.findUnique({ where: { id } });
-  if (!existing || (clientId && existing.clientId !== clientId)) {
+  if (!existing || !isMonitorAuthorized(existing, session)) {
     return reply.notFound('Monitor not found');
   }
   const body = request.body as any;
@@ -444,9 +454,9 @@ fastify.patch('/api/monitors/:id', async (request, reply) => {
 
 fastify.delete('/api/monitors/:id', async (request, reply) => {
   const { id } = request.params as { id: string };
-  const clientId = extractClientId(request);
+  const session = extractAuthSession(request);
   const existing = await prisma.monitor.findUnique({ where: { id } });
-  if (!existing || (clientId && existing.clientId !== clientId)) {
+  if (!existing || !isMonitorAuthorized(existing, session)) {
     return reply.notFound('Monitor not found');
   }
 
@@ -463,9 +473,9 @@ fastify.delete('/api/monitors/:id', async (request, reply) => {
 
 fastify.post('/api/monitors/:id/trigger', async (request, reply) => {
   const { id } = request.params as { id: string };
-  const clientId = extractClientId(request);
+  const session = extractAuthSession(request);
   const monitor = await prisma.monitor.findUnique({ where: { id } });
-  if (!monitor || (clientId && monitor.clientId !== clientId)) {
+  if (!monitor || !isMonitorAuthorized(monitor, session)) {
     return reply.notFound('Monitor not found');
   }
 
@@ -620,9 +630,9 @@ fastify.post('/api/test-notification', async (request, reply) => {
 // ── Alert History Endpoint ───────────────────────────────────────────────────
 fastify.get('/api/monitors/:id/alerts', async (request, reply) => {
   const { id } = request.params as { id: string };
-  const clientId = extractClientId(request);
+  const session = extractAuthSession(request);
   const monitor = await prisma.monitor.findUnique({ where: { id } });
-  if (!monitor || (clientId && monitor.clientId !== clientId)) {
+  if (!monitor || !isMonitorAuthorized(monitor, session)) {
     return reply.notFound('Monitor not found');
   }
   const alerts = await prisma.alertLog.findMany({

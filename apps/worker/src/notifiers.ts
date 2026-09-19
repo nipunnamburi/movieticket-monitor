@@ -174,15 +174,19 @@ export async function sendEmailAlert(
       });
 
       if (result.error) {
-        console.error('[Notifier] Resend API error:', result.error);
-        return { success: false, error: result.error.message || 'Resend delivery failed' };
+        console.warn('[Notifier] Resend API error:', result.error);
+        if (!cfg.emailFrom || !cfg.emailAppPassword) {
+          return { success: false, error: result.error.message || 'Resend delivery failed' };
+        }
+      } else {
+        console.log(`[Notifier] Email alert delivered via Resend to ${to} (id: ${result.data?.id})`);
+        return { success: true };
       }
-
-      console.log(`[Notifier] Email alert delivered via Resend to ${to} (id: ${result.data?.id})`);
-      return { success: true };
     } catch (err: any) {
-      console.error('[Notifier] Resend dispatch exception:', err);
-      return { success: false, error: err.message || String(err) };
+      console.warn('[Notifier] Resend dispatch exception, attempting SMTP fallback if configured:', err.message);
+      if (!cfg.emailFrom || !cfg.emailAppPassword) {
+        return { success: false, error: err.message || String(err) };
+      }
     }
   }
 
