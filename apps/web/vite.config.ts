@@ -13,4 +13,9 @@ export default defineConfig({
       },
     },
   },
+  define: {
+    // Expose VITE_API_URL at build time (set in Vercel env vars)
+    // Falls back to '' (same-origin) for local dev and Railway deploys
+    __API_URL__: JSON.stringify(process.env.VITE_API_URL || ''),
+  },
 });

@@ -489,7 +489,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onContinue
         <button
           type="button"
           onClick={() => {
-            window.location.href = '/api/auth/google';
+            // In production (Vercel split-deploy) __API_URL__ points to Fly.io.
+            // In local dev / Railway unified deploy it is '' (same-origin).
+            const apiBase = (typeof __API_URL__ !== 'undefined' && __API_URL__) ? __API_URL__ : '';
+            window.location.href = `${apiBase}/api/auth/google`;
           }}
           style={{
             width: '100%',

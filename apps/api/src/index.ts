@@ -25,7 +25,22 @@ const fastify = Fastify({
 });
 
 fastify.register(cors, {
-  origin: '*',
+  origin: (origin, callback) => {
+    // Always allow same-origin and non-browser requests
+    if (!origin) return callback(null, true);
+    const allowed = [
+      process.env.FRONTEND_URL,
+      'http://localhost:3000',
+      'http://localhost:5055',
+      'http://localhost:5173',
+    ].filter(Boolean);
+    // Allow any *.vercel.app subdomain automatically
+    if (allowed.includes(origin) || origin.endsWith('.vercel.app') || origin.endsWith('.fly.dev')) {
+      return callback(null, true);
+    }
+    callback(null, false);
+  },
+  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 });
 
