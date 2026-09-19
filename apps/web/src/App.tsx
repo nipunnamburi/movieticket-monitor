@@ -774,17 +774,79 @@ export default function App() {
         </div>
       )}
 
-      {/* Grid Layout: Main Monitor Cards & Real-time Telemetry Sidebar */}
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1.1fr', gap: '24px' }}>
-        {/* Left Column: Monitors */}
+      {/* KPI Overview Cards */}
+      <div className="kpi-grid">
+        <div className="kpi-card">
+          <div className="kpi-icon-wrapper" style={{ background: 'rgba(229, 9, 20, 0.15)', color: 'var(--bms-red)' }}>
+            <Film size={20} />
+          </div>
+          <div>
+            <div className="kpi-label">Active Monitors</div>
+            <div className="kpi-val">
+              {monitors.filter((m) => m.status === 'active').length}
+              <span style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-secondary)', marginLeft: '6px' }}>
+                / {monitors.length} total
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="kpi-card">
+          <div className="kpi-icon-wrapper" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#34d399' }}>
+            <Bell size={20} />
+          </div>
+          <div>
+            <div className="kpi-label">Alerts Triggered</div>
+            <div className="kpi-val">
+              {monitors.reduce((acc, m) => acc + (m.alerts?.length || 0), 0)}
+            </div>
+          </div>
+        </div>
+
+        <div className="kpi-card">
+          <div className="kpi-icon-wrapper" style={{ background: isConnected ? 'rgba(6, 182, 212, 0.15)' : 'rgba(239, 68, 68, 0.15)', color: isConnected ? '#38bdf8' : '#f87171' }}>
+            <Radio size={20} />
+          </div>
+          <div>
+            <div className="kpi-label">Radar Stream</div>
+            <div className="kpi-val" style={{ fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span className="pulse-dot" style={{ color: isConnected ? '#10b981' : '#ef4444' }} />
+              {isConnected ? 'ONLINE (SSE)' : 'OFFLINE'}
+            </div>
+          </div>
+        </div>
+
+        <div className="kpi-card">
+          <div className="kpi-icon-wrapper" style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24' }}>
+            <Clock size={20} />
+          </div>
+          <div>
+            <div className="kpi-label">Fastest Check Cadence</div>
+            <div className="kpi-val">
+              {monitors.length > 0
+                ? `${Math.min(...monitors.map((m) => m.checkIntervalSec || 60))}s`
+                : '--'}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Grid: Monitoring Table & Real-time Telemetry Sidebar */}
+      <div className="dashboard-grid">
+        {/* Left Column: Dense Monitoring Table */}
         <section>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
             <h2 style={{ fontSize: '1.1rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
-              Active Radar Trackers ({monitors.length})
+              Monitored Target Schedule ({monitors.length})
             </h2>
-            <button className="btn btn-secondary" onClick={fetchMonitors} style={{ padding: '6px 12px' }}>
-              <RefreshCw size={14} /> Refresh
-            </button>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button className="btn btn-secondary" onClick={fetchMonitors} style={{ padding: '6px 12px' }}>
+                <RefreshCw size={14} /> Refresh
+              </button>
+              <button className="btn btn-primary" onClick={() => setShowAddModal(true)} style={{ padding: '6px 14px' }}>
+                <Plus size={14} /> New Monitor
+              </button>
+            </div>
           </div>
 
           {loading ? (
@@ -803,214 +865,205 @@ export default function App() {
               </button>
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {monitors.map((m) => (
-                <div key={m.id} className="glass-card" style={{ padding: '20px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                        <h3 style={{ fontSize: '1.15rem', fontWeight: 700 }}>{m.name}</h3>
-                        <span className={`badge ${m.status === 'active' ? 'badge-active' : 'badge-alert'}`}>
-                          {m.status}
-                        </span>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '14px', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <MapPin size={14} /> {m.city}
-                        </span>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <Clock size={14} /> Every {m.checkIntervalSec}s
-                        </span>
-                        {m.lastChecked && (
-                          <span>Last checked: {new Date(m.lastChecked).toLocaleTimeString()}</span>
-                        )}
-                      </div>
-                    </div>
+            <div className="glass-card monitor-table-container">
+              <table className="monitor-table">
+                <thead>
+                  <tr>
+                    <th>Movie / Event</th>
+                    <th>City</th>
+                    <th>Theatres & Dates</th>
+                    <th>Status</th>
+                    <th>Last Checked</th>
+                    <th style={{ textAlign: 'right' }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {monitors.map((m) => {
+                    const todayStr = new Date().toISOString().slice(0, 10);
+                    const dates = m.filterDates.length > 0 ? [...m.filterDates].sort() : [];
+                    const firstDate = dates[0] || '';
+                    const lastDate = dates[dates.length - 1] || '';
+                    const isBeforeRun = firstDate && todayStr < firstDate;
+                    const isAfterRun = lastDate && todayStr > lastDate;
 
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <button
-                        className="btn btn-secondary"
-                        onClick={() => handleTrigger(m.id)}
-                        title="Trigger Instant Check"
-                        style={{ padding: '8px 12px' }}
-                      >
-                        <RefreshCw size={14} /> Check Now
-                      </button>
-                      <button
-                        className="btn btn-secondary"
-                        onClick={() => setSelectedMonitorForHistory(m)}
-                        title="View Alert History"
-                        style={{ padding: '8px 10px' }}
-                      >
-                        <History size={14} />
-                      </button>
-                      <button
-                        className="btn btn-secondary"
-                        onClick={() => handleToggleStatus(m.id, m.status)}
-                        title={m.status === 'active' ? 'Pause' : 'Resume'}
-                        style={{ padding: '8px 10px' }}
-                      >
-                        {m.status === 'active' ? <Pause size={14} /> : <Play size={14} />}
-                      </button>
-                      <button
-                        className="btn btn-secondary"
-                        onClick={() => handleDelete(m.id)}
-                        style={{ padding: '8px 10px', color: '#f87171' }}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </div>
+                    return (
+                      <tr key={m.id}>
+                        {/* Target Title & Link */}
+                        <td style={{ minWidth: '180px' }}>
+                          <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                            {m.name}
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <a
+                              href={m.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{
+                                color: 'var(--bms-red)',
+                                textDecoration: 'none',
+                                fontSize: '0.74rem',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '3px',
+                                fontWeight: 600,
+                              }}
+                            >
+                              BMS Link <ExternalLink size={10} />
+                            </a>
+                            {isBeforeRun && (
+                              <span style={{ fontSize: '0.7rem', color: '#fbbf24', background: 'rgba(245, 158, 11, 0.12)', padding: '2px 6px', borderRadius: '4px' }}>
+                                Starts {firstDate}
+                              </span>
+                            )}
+                            {isAfterRun && (
+                              <span style={{ fontSize: '0.7rem', color: '#f87171', background: 'rgba(239, 68, 68, 0.12)', padding: '2px 6px', borderRadius: '4px' }}>
+                                Ended ({lastDate})
+                              </span>
+                            )}
+                          </div>
+                        </td>
 
-                  {/* Filter tags */}
-                  {(m.filterTheatres.length > 0 || m.filterDates.length > 0) && (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '12px' }}>
-                      {m.filterTheatres.map((t) => {
-                        const isFav = favouriteTheatres.includes(t);
-                        const isNearest = nearestTheatre === t;
-                        return (
-                          <span
-                            key={t}
-                            style={{
-                              background: 'rgba(255,255,255,0.06)',
-                              border: isFav ? '1px solid rgba(229, 9, 20, 0.4)' : isNearest ? '1px solid rgba(56, 189, 248, 0.4)' : '1px solid var(--border-subtle)',
-                              padding: '3px 8px',
-                              borderRadius: '4px',
-                              fontSize: '0.75rem',
-                              color: 'var(--text-secondary)',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '4px',
-                            }}
-                            title={isFav && isNearest ? 'Favourite & Nearest Theatre' : isFav ? 'Favourite Theatre' : isNearest ? 'Nearest to Home' : undefined}
-                          >
-                            {isFav && <Heart size={11} color="#e50914" fill="#e50914" />}
-                            {isNearest && <Home size={11} color="#38bdf8" />}
-                            <span>🏛️ {t}</span>
+                        {/* City & Interval */}
+                        <td style={{ whiteSpace: 'nowrap' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--text-primary)' }}>
+                            <MapPin size={13} color="var(--text-secondary)" /> {m.city}
+                          </div>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                            Every {m.checkIntervalSec}s
+                          </div>
+                        </td>
+
+                        {/* Theatres & Dates */}
+                        <td style={{ maxWidth: '240px' }}>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '4px' }}>
+                            {m.filterTheatres.length === 0 ? (
+                              <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>All Theatres</span>
+                            ) : (
+                              m.filterTheatres.slice(0, 2).map((t) => {
+                                const isFav = favouriteTheatres.includes(t);
+                                const isNearest = nearestTheatre === t;
+                                const shortName = t.split(':')[0] || t;
+                                return (
+                                  <span
+                                    key={t}
+                                    style={{
+                                      background: 'rgba(255,255,255,0.06)',
+                                      padding: '2px 6px',
+                                      borderRadius: '4px',
+                                      fontSize: '0.72rem',
+                                      color: 'var(--text-secondary)',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '3px',
+                                    }}
+                                    title={t}
+                                  >
+                                    {isFav && <Heart size={10} color="#e50914" fill="#e50914" />}
+                                    {isNearest && <Home size={10} color="#38bdf8" />}
+                                    <span>{shortName}</span>
+                                  </span>
+                                );
+                              })
+                            )}
+                            {m.filterTheatres.length > 2 && (
+                              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                +{m.filterTheatres.length - 2} more
+                              </span>
+                            )}
+                          </div>
+
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                            {m.filterDates.length === 0 ? (
+                              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>All Dates</span>
+                            ) : (
+                              m.filterDates.map((d) => (
+                                <span
+                                  key={d}
+                                  style={{
+                                    background: 'rgba(255,255,255,0.04)',
+                                    padding: '2px 5px',
+                                    borderRadius: '3px',
+                                    fontSize: '0.7rem',
+                                    color: 'var(--text-muted)',
+                                  }}
+                                >
+                                  {d}
+                                </span>
+                              ))
+                            )}
+                          </div>
+                        </td>
+
+                        {/* Status */}
+                        <td>
+                          <span className={`badge ${m.status === 'active' ? 'badge-active' : 'badge-alert'}`}>
+                            {m.status}
                           </span>
-                        );
-                      })}
-                      {m.filterDates.map((d) => (
-                        <span
-                          key={d}
-                          style={{
-                            background: 'rgba(255,255,255,0.06)',
-                            padding: '3px 8px',
-                            borderRadius: '4px',
-                            fontSize: '0.75rem',
-                            color: 'var(--text-secondary)',
-                          }}
-                        >
-                          📅 {d}
-                        </span>
-                      ))}
-                    </div>
-                  )}
+                        </td>
 
-                  {/* Alert summary / link */}
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      fontSize: '0.8rem',
-                      paddingTop: '12px',
-                      borderTop: '1px solid var(--border-subtle)',
-                    }}
-                  >
-                    <button
-                      onClick={() => setSelectedMonitorForHistory(m)}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        color: 'var(--accent-green)',
-                        cursor: 'pointer',
-                        fontSize: '0.8rem',
-                        fontWeight: 600,
-                        padding: 0,
-                      }}
-                    >
-                      <Bell size={14} />
-                      <span>{m.alerts.length} ticket alerts recorded (View History)</span>
-                    </button>
-                    {/* Booking Link / Date Window Check */}
-                    {(() => {
-                      const todayStr = new Date().toISOString().slice(0, 10);
-                      const dates = m.filterDates.length > 0 ? [...m.filterDates].sort() : [];
-                      const firstDate = dates[0] || '';
-                      const lastDate = dates[dates.length - 1] || '';
-
-                      const isBeforeRun = firstDate && todayStr < firstDate;
-                      const isAfterRun = lastDate && todayStr > lastDate;
-
-                      if (isBeforeRun) {
-                        return (
-                          <div
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '6px',
-                              background: 'rgba(245, 158, 11, 0.12)',
-                              border: '1px solid rgba(245, 158, 11, 0.3)',
-                              padding: '4px 10px',
-                              borderRadius: '6px',
-                              fontSize: '0.74rem',
-                              color: '#fbbf24',
-                              fontWeight: 600,
-                            }}
-                            title={`Screenings start on ${firstDate}. Booking opens when showtimes commence.`}
-                          >
-                            <span>⏳ Shows Start {firstDate} (Pre-Release)</span>
+                        {/* Last Checked */}
+                        <td style={{ whiteSpace: 'nowrap', fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
+                          {m.lastChecked ? new Date(m.lastChecked).toLocaleTimeString() : 'Pending'}
+                          <div style={{ marginTop: '2px' }}>
+                            <button
+                              onClick={() => setSelectedMonitorForHistory(m)}
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                color: 'var(--accent-green)',
+                                cursor: 'pointer',
+                                fontSize: '0.72rem',
+                                padding: 0,
+                                textDecoration: 'underline',
+                              }}
+                            >
+                              {m.alerts?.length || 0} alert(s)
+                            </button>
                           </div>
-                        );
-                      }
+                        </td>
 
-                      if (isAfterRun) {
-                        return (
-                          <div
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '6px',
-                              background: 'rgba(239, 68, 68, 0.12)',
-                              border: '1px solid rgba(239, 68, 68, 0.3)',
-                              padding: '4px 10px',
-                              borderRadius: '6px',
-                              fontSize: '0.74rem',
-                              color: '#f87171',
-                              fontWeight: 600,
-                            }}
-                            title={`Screenings ended on ${lastDate}. Bookings are closed.`}
-                          >
-                            <span>⛔ Show Run Ended ({lastDate})</span>
+                        {/* Action buttons */}
+                        <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                          <div style={{ display: 'inline-flex', gap: '6px' }}>
+                            <button
+                              className="btn btn-secondary"
+                              onClick={() => handleTrigger(m.id)}
+                              title="Trigger Instant Check"
+                              style={{ padding: '6px 8px', fontSize: '0.75rem' }}
+                            >
+                              <RefreshCw size={12} />
+                            </button>
+                            <button
+                              className="btn btn-secondary"
+                              onClick={() => setSelectedMonitorForHistory(m)}
+                              title="View Alert History"
+                              style={{ padding: '6px 8px', fontSize: '0.75rem' }}
+                            >
+                              <History size={12} />
+                            </button>
+                            <button
+                              className="btn btn-secondary"
+                              onClick={() => handleToggleStatus(m.id, m.status)}
+                              title={m.status === 'active' ? 'Pause' : 'Resume'}
+                              style={{ padding: '6px 8px', fontSize: '0.75rem' }}
+                            >
+                              {m.status === 'active' ? <Pause size={12} /> : <Play size={12} />}
+                            </button>
+                            <button
+                              className="btn btn-secondary"
+                              onClick={() => handleDelete(m.id)}
+                              title="Delete Monitor"
+                              style={{ padding: '6px 8px', fontSize: '0.75rem', color: '#f87171' }}
+                            >
+                              <Trash2 size={12} />
+                            </button>
                           </div>
-                        );
-                      }
-
-                      return (
-                        <a
-                          href={m.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            color: 'var(--bms-red)',
-                            textDecoration: 'none',
-                            fontWeight: 600,
-                          }}
-                        >
-                          BMS Show Page <ExternalLink size={12} />
-                        </a>
-                      );
-                    })()}
-                  </div>
-                </div>
-              ))}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
         </section>
