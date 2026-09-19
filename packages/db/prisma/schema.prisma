@@ -8,13 +8,15 @@ generator client {
 }
 
 model User {
-  id        String    @id @default(cuid())
-  email     String    @unique
-  password  String
-  name      String?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  monitors  Monitor[]
+  id         String    @id @default(cuid())
+  email      String    @unique
+  password   String?   // Nullable — Google OAuth users have no password
+  name       String?
+  googleId   String?   @unique // Google OAuth subject ID
+  avatarUrl  String?   // Google profile picture URL
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  monitors   Monitor[]
 }
 
 model Monitor {

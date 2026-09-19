@@ -187,6 +187,9 @@ fastify.post('/api/auth/login', async (request, reply) => {
       return reply.status(401).send({ error: 'Unauthorized', message: 'Invalid email or password' });
     }
 
+    if (!user.password) {
+      return reply.status(401).send({ error: 'Unauthorized', message: 'This account uses Google Sign-In. Please sign in with Google.' });
+    }
     const isMatch = await comparePassword(String(password), user.password);
     if (!isMatch) {
       return reply.status(401).send({ error: 'Unauthorized', message: 'Invalid email or password' });
@@ -229,6 +232,122 @@ fastify.get('/api/auth/me', async (request, reply) => {
   }
 
   return { user };
+});
+
+// ── Google OAuth 2.0 ─────────────────────────────────────────────────────────
+// Environment variables required:
+//   GOOGLE_CLIENT_ID     — from Google Cloud Console
+//   GOOGLE_CLIENT_SECRET — from Google Cloud Console
+//   GOOGLE_REDIRECT_URI  — must be registered in Google Cloud (e.g. https://your-domain.com/api/auth/google/callback)
+//   FRONTEND_URL         — where to redirect after auth (e.g. https://your-domain.com)
+
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
+const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:5055/api/auth/google/callback';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+// Step 1: Redirect user to Google's OAuth consent screen
+fastify.get('/api/auth/google', async (request, reply) => {
+  if (!GOOGLE_CLIENT_ID) {
+    return reply.status(503).send({ error: 'Google OAuth not configured', message: 'GOOGLE_CLIENT_ID is not set on this server.' });
+  }
+  const params = new URLSearchParams({
+    client_id: GOOGLE_CLIENT_ID,
+    redirect_uri: GOOGLE_REDIRECT_URI,
+    response_type: 'code',
+    scope: 'openid email profile',
+    access_type: 'online',
+    prompt: 'select_account',
+  });
+  return reply.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
+});
+
+// Step 2: Google redirects back here with ?code=...
+fastify.get('/api/auth/google/callback', async (request, reply) => {
+  const { code, error: oauthError } = (request.query as any) || {};
+
+  if (oauthError || !code) {
+    const reason = oauthError || 'no_code';
+    return reply.redirect(`${FRONTEND_URL}?auth_error=${encodeURIComponent(reason)}`);
+  }
+
+  try {
+    // Exchange auth code for tokens
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code: String(code),
+        client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
+        redirect_uri: GOOGLE_REDIRECT_URI,
+        grant_type: 'authorization_code',
+      }).toString(),
+    });
+
+    if (!tokenRes.ok) {
+      const errBody = await tokenRes.text();
+      fastify.log.error({ errBody }, 'Google token exchange failed');
+      return reply.redirect(`${FRONTEND_URL}?auth_error=${encodeURIComponent('google_token_exchange_failed')}`);
+    }
+
+    const tokenData: any = await tokenRes.json();
+    const accessToken: string = tokenData.access_token;
+
+    // Fetch Google user info
+    const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!userInfoRes.ok) {
+      return reply.redirect(`${FRONTEND_URL}?auth_error=${encodeURIComponent('google_userinfo_failed')}`);
+    }
+
+    const googleUser: any = await userInfoRes.json();
+    const { id: googleId, email, name, picture: avatarUrl } = googleUser;
+
+    if (!email || !googleId) {
+      return reply.redirect(`${FRONTEND_URL}?auth_error=${encodeURIComponent('missing_google_profile')}`);
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // Upsert user: find by googleId first, then by email
+    let user = await prisma.user.findFirst({
+      where: { OR: [{ googleId }, { email: normalizedEmail }] },
+    });
+
+    if (user) {
+      // Update Google-specific fields if needed
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          googleId: user.googleId || googleId,
+          avatarUrl: avatarUrl || user.avatarUrl,
+          name: user.name || name || normalizedEmail.split('@')[0],
+        },
+      });
+    } else {
+      // Create new user (Google-only, no password)
+      user = await prisma.user.create({
+        data: {
+          email: normalizedEmail,
+          name: name || normalizedEmail.split('@')[0],
+          googleId,
+          avatarUrl,
+          password: null,
+        },
+      });
+    }
+
+    const jwtToken = generateToken({ userId: user.id, email: user.email });
+
+    // Redirect to frontend with token in URL query param (frontend picks it up and stores in localStorage)
+    return reply.redirect(`${FRONTEND_URL}?auth_token=${encodeURIComponent(jwtToken)}&auth_user=${encodeURIComponent(JSON.stringify({ id: user.id, email: user.email, name: user.name, avatarUrl: user.avatarUrl }))}`);
+  } catch (err: any) {
+    fastify.log.error(err, 'Google OAuth callback error');
+    return reply.redirect(`${FRONTEND_URL}?auth_error=${encodeURIComponent('internal_error')}`);
+  }
 });
 
 // ── URL Parsing Helper ────────────────────────────────────────────────────────

@@ -148,6 +148,32 @@ export default function App() {
     setIsGuest(false);
   };
 
+  // Handle Google OAuth redirect — picks up ?auth_token= & ?auth_user= from the callback URL
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const oauthToken = params.get('auth_token');
+    const oauthUser = params.get('auth_user');
+    const oauthError = params.get('auth_error');
+
+    if (oauthToken && oauthUser) {
+      try {
+        const parsedUser = JSON.parse(oauthUser) as AuthUser;
+        handleLoginSuccess(parsedUser, oauthToken);
+      } catch {
+        // Ignore parse errors — user will see the login page
+      }
+      // Clean up the URL so token is not visible or bookmarkable
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (oauthError) {
+      // Let the login page show the error by storing it briefly
+      const msg = decodeURIComponent(oauthError).replace(/_/g, ' ');
+      console.error('Google OAuth error:', msg);
+      // Clean URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleLogout = () => {
     if (confirm('Are you sure you want to log out?')) {
       localStorage.removeItem('bms_auth_token');
