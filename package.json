@@ -13,7 +13,7 @@
     "dev:web": "npm run dev --workspace=apps/web",
     "dev": "concurrently \"npm:dev:api\" \"npm:dev:worker\" \"npm:dev:web\"",
     "build": "npm run db:generate && npm run build --workspaces --if-present",
-    "build:web": "npm --workspace=@bms/web run build",
+    "build-web": "npm --workspace=@bms/web run build",
     "start": "concurrently \"npm run start --workspace=apps/api\" \"npm run start --workspace=apps/worker\"",
     "runner": "tsx --env-file=.env apps/worker/src/runner.ts",
     "db:generate": "prisma generate --schema=packages/db/prisma/schema.prisma",
