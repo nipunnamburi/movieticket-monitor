@@ -17,6 +17,7 @@ import { prisma } from '@bms/db';
 import { redis, bmsPollQueue, bmsAlertQueue, bmsAlertEvents } from './queue.js';
 import { eventHub } from './events.js';
 import { hashPassword, comparePassword, generateToken, verifyToken, validatePassword } from './auth.js';
+import { sendEmailAlert, sendWhatsAppAlert } from './notifiers.js';
 
 const fastify = Fastify({
   logger: {
@@ -727,31 +728,33 @@ fastify.post('/api/test-notification', async (request, reply) => {
   }
 
   try {
-    const job = await bmsAlertQueue.add(
-      'test-alert',
-      {
-        channel,
-        target,
-        test: true,
-        payload: {
-          monitorName: 'BookMyShow Live Monitor Alert',
-          city: 'Hyderabad',
-          url: 'https://in.bookmyshow.com/',
-          openings: [
-            {
-              date: 'Sample Show Date',
-              theatre: 'PVR: Forum Sujana Mall (Test)',
-              showtime: '07:15 PM',
-              change: '🟢 Tickets opened up! (Test Dispatch)',
-              newStatus: 'available',
-            },
-          ],
+    const samplePayload = {
+      monitorName: 'BookMyShow Live Monitor Alert',
+      city: 'Hyderabad',
+      url: 'https://in.bookmyshow.com/',
+      openings: [
+        {
+          date: 'Sample Show Date',
+          dateCode: '20260920',
+          theatre: 'PVR: Forum Sujana Mall (Test)',
+          showtime: '07:15 PM',
+          change: '🟢 Tickets opened up! (Test Dispatch)',
+          newStatus: 'available',
         },
-      },
-      { priority: 1, removeOnComplete: true }
-    );
+      ],
+    };
 
-    await job.waitUntilFinished(bmsAlertEvents, 15000);
+    let result: { success: boolean; error?: string };
+    if (channel === 'EMAIL') {
+      result = await sendEmailAlert(target, samplePayload.monitorName, samplePayload.city, samplePayload.url, samplePayload.openings);
+    } else {
+      result = await sendWhatsAppAlert(target, samplePayload.monitorName, samplePayload.city, samplePayload.url, samplePayload.openings);
+    }
+
+    if (!result.success) {
+      return reply.badRequest(`Delivery failed: ${result.error || 'Check notification credentials and network connectivity'}`);
+    }
+
     return { ok: true, message: `✅ Sample alert successfully delivered to ${target}!` };
   } catch (err: any) {
     fastify.log.error(err, 'Test alert dispatch failed');
