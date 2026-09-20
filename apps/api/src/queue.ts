@@ -16,7 +16,6 @@ const isTls = redisUrl.startsWith('rediss://');
 export const redis = new Redis(redisUrl, {
   maxRetriesPerRequest: null,
   enableReadyCheck: false,
-  lazyConnect: true,
   ...(isTls ? { tls: { rejectUnauthorized: false } } : {}),
 });
 
@@ -48,7 +47,6 @@ export const bmsAlertQueue = new Queue('bms-alert', {
 const alertEventsRedis = new Redis(redisUrl, {
   maxRetriesPerRequest: null,
   enableReadyCheck: false,
-  lazyConnect: true,
   ...(isTls ? { tls: { rejectUnauthorized: false } } : {}),
 });
 alertEventsRedis.on('error', () => {});

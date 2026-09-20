@@ -20,7 +20,6 @@ const isTls = redisUrl.startsWith('rediss://');
 const redis = new Redis(redisUrl, {
   maxRetriesPerRequest: null,
   enableReadyCheck: false,
-  lazyConnect: true,
   ...(isTls ? { tls: { rejectUnauthorized: false } } : {}),
 });
 
