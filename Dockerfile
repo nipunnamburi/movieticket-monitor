@@ -11,7 +11,7 @@ COPY apps/worker/package.json ./apps/worker/
 COPY apps/web/package.json ./apps/web/
 
 # Install dependencies
-RUN npm ci
+RUN npm install
 
 # Copy application source code
 COPY . .
