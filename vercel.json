@@ -6,7 +6,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://bms-monitor-api.onrender.com/api/:path*"
+      "destination": "https://bms-monitor-api-pglj.onrender.com/api/:path*"
     },
     {
       "source": "/(.*)",
