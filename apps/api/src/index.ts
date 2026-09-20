@@ -820,7 +820,7 @@ fastify.get('/api/theatres', async () => {
 });
 
 // ── Health Check ──────────────────────────────────────────────────────────────
-fastify.get('/api/health', async () => {
+const handleHealth = async () => {
   const [monitorCount, redisStatus] = await Promise.all([
     prisma.monitor.count(),
     redis.ping(),
@@ -833,7 +833,10 @@ fastify.get('/api/health', async () => {
     monitors: monitorCount,
     timestamp: new Date().toISOString(),
   };
-});
+};
+
+fastify.get('/health', handleHealth);
+fastify.get('/api/health', handleHealth);
 
 // ── Static Web Serving (Unified Single Port Deployment) ────────────────────────
 const webDistPath = path.resolve(__dirname, '../../web/dist');
