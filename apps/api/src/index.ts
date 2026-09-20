@@ -694,7 +694,7 @@ fastify.post('/api/settings/notifications', async (request, reply) => {
 });
 
 // ── Notification Test Endpoint ────────────────────────────────────────────────
-fastify.post('/api/test-notification', async (request, reply) => {
+const handleTestNotification = async (request: any, reply: any) => {
   const session = extractAuthSession(request);
   let { channel, target } = (request.body as any) || {};
   if (channel === 'EMAIL' && !target && session.email) {
@@ -762,7 +762,10 @@ fastify.post('/api/test-notification', async (request, reply) => {
       `Delivery failed: ${err.message || 'Check notification credentials and network connectivity'}`
     );
   }
-});
+};
+
+fastify.post('/api/test-notification', handleTestNotification);
+fastify.post('/api/settings/test-alert', handleTestNotification);
 
 // ── Alert History Endpoint ───────────────────────────────────────────────────
 fastify.get('/api/monitors/:id/alerts', async (request, reply) => {
