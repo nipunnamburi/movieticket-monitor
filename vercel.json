@@ -6,7 +6,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://bms-monitor-api.fly.dev/api/:path*"
+      "destination": "https://bms-monitor-api.onrender.com/api/:path*"
     },
     {
       "source": "/(.*)",

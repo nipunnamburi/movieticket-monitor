@@ -35,7 +35,7 @@ fastify.register(cors, {
       'http://localhost:5173',
     ].filter(Boolean);
     // Allow any *.vercel.app subdomain automatically
-    if (allowed.includes(origin) || origin.endsWith('.vercel.app') || origin.endsWith('.fly.dev')) {
+    if (allowed.includes(origin) || origin.endsWith('.vercel.app') || origin.endsWith('.onrender.com')) {
       return callback(null, true);
     }
     callback(null, false);
