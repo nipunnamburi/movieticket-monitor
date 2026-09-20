@@ -15,7 +15,7 @@
     "dotenv": "^16.4.7",
     "ioredis": "^5.4.2",
     "nodemailer": "^10.0.1",
-    "playwright": "^1.49.1",
+    "playwright": "1.49.1",
     "twilio": "^6.1.0"
   },
   "devDependencies": {
