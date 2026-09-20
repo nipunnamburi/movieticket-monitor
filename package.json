@@ -31,6 +31,7 @@
     "vitest": "^5.0.1"
   },
   "dependencies": {
-    "resend": "^6.28.1"
+    "resend": "^6.28.1",
+    "vite": "^6.0.3"
   }
 }
