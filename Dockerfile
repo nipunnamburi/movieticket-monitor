@@ -12,7 +12,6 @@ COPY apps/web/package.json ./apps/web/
 
 # Install dependencies
 RUN npm install
-RUN npx playwright install --with-deps chromium
 
 # Copy application source code
 COPY . .
