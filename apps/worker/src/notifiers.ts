@@ -87,8 +87,8 @@ export async function sendEmailAlert(
   const cfg = await getNotificationConfig();
   const to = recipientEmail || cfg.defaultEmailTo || cfg.emailFrom;
 
-  if (!cfg.resendApiKey && (!cfg.emailFrom || !cfg.emailAppPassword)) {
-    const msg = 'No email credentials configured (requires RESEND_API_KEY or EMAIL_FROM + EMAIL_APP_PASSWORD)';
+  if (!cfg.emailFrom || !cfg.emailAppPassword) {
+    const msg = 'No Gmail SMTP credentials configured (requires EMAIL_FROM + EMAIL_APP_PASSWORD)';
     console.warn(`[Notifier] ${msg}`);
     return { success: false, error: msg };
   }
@@ -164,9 +164,8 @@ export async function sendEmailAlert(
     </html>
   `;
 
-  let resendErrorMsg = '';
-
-  // 1. Primary: Resend Service API
+  /*
+  // 1. Primary: Resend Service API (Disabled for now - using Gmail SMTP directly)
   if (cfg.resendApiKey) {
     try {
       const resend = new Resend(cfg.resendApiKey);
@@ -196,6 +195,7 @@ export async function sendEmailAlert(
       }
     }
   }
+  */
 
   // 2. Fallback: Nodemailer SMTP (Gmail / Custom SMTP)
   try {
@@ -224,9 +224,6 @@ export async function sendEmailAlert(
   } catch (err: any) {
     console.error('[Notifier] SMTP dispatch error:', err);
     const smtpErrorMsg = err.message || String(err);
-    if (resendErrorMsg) {
-      return { success: false, error: `Resend error: ${resendErrorMsg} | SMTP fallback error: ${smtpErrorMsg}` };
-    }
     return { success: false, error: `SMTP error: ${smtpErrorMsg}` };
   }
 }

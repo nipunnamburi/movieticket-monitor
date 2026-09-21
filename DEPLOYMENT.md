@@ -23,32 +23,46 @@ This gives you a free, public HTTPS URL (e.g. `https://random-subdomain.trycloud
 
 ---
 
-## 2. Cloud Deployment (24/7 Background Ticket Radar)
+## 2. Cloud Deployment ($0/mo Free Tier Setup)
 
-Because the project runs a persistent background worker with BullMQ, Redis, and Playwright for real-time ticket scanning, it requires a container or VPS rather than stateless serverless lambdas.
+### Option A: 100% Free Serverless & Cron Hybrid (Recommended)
 
-### Option A: Railway (Recommended — 5 Minutes)
-Railway natively provisions PostgreSQL and Redis with 1 click:
-1. Go to [railway.app](https://railway.app/) and create a new project.
-2. Click **+ New** -> **Database** -> **Add PostgreSQL**.
-3. Click **+ New** -> **Database** -> **Add Redis**.
-4. Click **+ New** -> **GitHub Repo** -> select your BookMyShow repository.
-5. In your App Service **Variables**, add:
-   - `DATABASE_URL`: `${{Postgres.DATABASE_URL}}`
-   - `REDIS_URL`: `${{Redis.REDIS_URL}}`
-   - `PORT`: `5055`
-   - Plus your notification credentials (`EMAIL_FROM`, `EMAIL_APP_PASSWORD`, `CALLMEBOT_API_KEY`, etc.)
-6. Railway will build the `Dockerfile` automatically and generate a public HTTPS URL for your phone!
+This setup runs your app 24/7 without paying hosting fees or running continuous server daemons.
 
-### Option B: Docker Compose (VPS / DigitalOcean / Hetzner / AWS EC2)
-If you have a Linux server or VPS:
-```bash
-git clone <your-repo-url>
-cd bookmyshow-monitor
-cp .env.example .env
-docker compose up -d --build
-```
-Your app will be live on `http://<your-server-ip>:5055`.
+#### Step 1: Create Free PostgreSQL Database (Neon)
+1. Sign up for free at [neon.tech](https://neon.tech).
+2. Create a project (e.g. `bms-monitor-db`).
+3. Copy your Connection String (`postgres://...`). Ensure `?sslmode=require` is appended.
+
+#### Step 2: Create Free Redis Cache (Upstash - Optional)
+1. Sign up for free at [upstash.com](https://upstash.com).
+2. Create a global Redis database and copy the `REDIS_URL`.
+
+#### Step 3: Configure GitHub Actions 24/7 Cloud Scraper
+1. Push your code repository to **GitHub**.
+2. Go to your repository on GitHub -> **Settings** -> **Secrets and variables** -> **Actions**.
+3. Click **New repository secret** and add:
+   - `DATABASE_URL`: Your Neon Postgres connection string.
+   - `DEFAULT_EMAIL_TO`: Your target notification email address.
+   - `EMAIL_FROM`: Your sender email address.
+   - `EMAIL_APP_PASSWORD`: Your Gmail App Password (or `RESEND_API_KEY`).
+   - `CALLMEBOT_API_KEY` / `DEFAULT_WHATSAPP_TO`: (Optional for WhatsApp alerts).
+4. The GitHub Action in `.github/workflows/monitor.yml` will now automatically run `npm run runner` every 5 minutes in the cloud 100% free! You can also trigger it manually anytime under the **Actions** tab.
+
+#### Step 4: Deploy Frontend & Dashboard to Vercel
+1. Import your GitHub repository on [vercel.com](https://vercel.com).
+2. Set Build Command to: `npm --prefix apps/web run build`
+3. Set Output Directory to: `apps/web/dist`
+4. Add environment variables:
+   - `DATABASE_URL`: Your Neon connection string.
+5. Deploy! Vercel will host your web dashboard with zero costs.
+
+---
+
+### Option B: Paid Container Hosting (Railway / Render / VPS)
+If you prefer a continuous Docker process rather than scheduled cron execution:
+- **Railway:** Connect repo, add Postgres + Redis plugins, set `DATABASE_URL` and `REDIS_URL`. (~$5/mo).
+- **Docker Compose (VPS):** Run `docker compose up -d --build` on an Oracle Cloud Always Free VPS or Linux server.
 
 ---
 
