@@ -89,16 +89,22 @@ export function createServer(): FastifyInstance {
 
   // ── Health Check ──────────────────────────────────────────────────────────
   const handleHealth = async () => {
-    const [monitorCount, redisStatus] = await Promise.all([
-      prisma.monitor.count(),
-      redis.ping(),
-    ]);
+    let redisStatus = 'disconnected';
+    try {
+      const pingRes = await redis.ping();
+      redisStatus = pingRes === 'PONG' ? 'connected' : 'disconnected';
+    } catch (e: any) {
+      redisStatus = e.message?.includes('max requests limit') ? 'quota_exceeded' : 'error';
+    }
+
+    const monitorCount = await prisma.monitor.count().catch(() => 0);
 
     return {
       status: 'ok',
       database: 'PostgreSQL (Prisma)',
-      redis: redisStatus === 'PONG' ? 'connected' : 'disconnected',
+      redis: redisStatus,
       monitors: monitorCount,
+      cronMode: 'GitHub Actions / Serverless',
       timestamp: new Date().toISOString(),
     };
   };

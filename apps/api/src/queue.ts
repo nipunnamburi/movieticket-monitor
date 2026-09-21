@@ -16,11 +16,16 @@ const isTls = redisUrl.startsWith('rediss://');
 export const redis = new Redis(redisUrl, {
   maxRetriesPerRequest: null,
   enableReadyCheck: false,
+  lazyConnect: true,
+  retryStrategy: (times) => Math.min(times * 1000, 30000),
   ...(isTls ? { tls: { rejectUnauthorized: false } } : {}),
 });
 
 redis.on('error', (err) => {
-  // Silent or debug log in serverless
+  // Suppress uncaught Upstash quota/connection errors so API server remains alive
+  if (err.message?.includes('max requests limit exceeded')) {
+    console.warn('[Redis] Upstash daily request limit reached. Background BullMQ queue suspended, direct API active.');
+  }
 });
 
 export const bmsPollQueue = new Queue('bms-poll', {
