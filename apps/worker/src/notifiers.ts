@@ -1,9 +1,15 @@
 import nodemailer from 'nodemailer';
+import dns from 'dns';
 import { ShowOpening } from '@bms/shared';
 import { prisma } from '@bms/db';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+
+// Force Node.js process to always resolve IPv4 addresses first
+if (dns.setDefaultResultOrder) {
+  dns.setDefaultResultOrder('ipv4first');
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -46,6 +52,11 @@ export async function getNotificationConfig(): Promise<NotificationConfig> {
   };
 }
 
+// Strict IPv4 DNS Lookup function to avoid ENETUNREACH errors on networks without IPv6 routes
+const strictIpv4Lookup = (hostname: string, _opts: any, callback: (err: NodeJS.ErrnoException | null, address: string, family: number) => void) => {
+  dns.lookup(hostname, { family: 4, all: false }, callback);
+};
+
 async function dispatchMailWithFallback(
   cfg: NotificationConfig,
   mailOptions: { from: string; to: string; subject: string; html: string }
@@ -55,46 +66,50 @@ async function dispatchMailWithFallback(
   const strategies: Array<{ name: string; options: any }> = [];
 
   if (isGmail) {
-    // 1. Gmail Service preset
+    // 1. Port 465 SSL with Strict IPv4 Lookup
     strategies.push({
-      name: 'Gmail Service Preset',
-      options: {
-        service: 'gmail',
-        auth: { user: cfg.emailFrom, pass: cfg.emailAppPassword },
-        connectionTimeout: 6000,
-        greetingTimeout: 6000,
-        socketTimeout: 6000,
-      },
-    });
-
-    // 2. Port 465 SSL (IPv4)
-    strategies.push({
-      name: 'Port 465 SSL (IPv4)',
+      name: 'Port 465 SSL (Strict IPv4)',
       options: {
         host: 'smtp.gmail.com',
         port: 465,
         secure: true,
         auth: { user: cfg.emailFrom, pass: cfg.emailAppPassword },
-        connectionTimeout: 6000,
-        greetingTimeout: 6000,
-        socketTimeout: 6000,
+        connectionTimeout: 7000,
+        greetingTimeout: 7000,
+        socketTimeout: 7000,
         family: 4,
+        lookup: strictIpv4Lookup,
       },
     });
 
-    // 3. Port 587 STARTTLS (IPv4)
+    // 2. Port 587 STARTTLS with Strict IPv4 Lookup
     strategies.push({
-      name: 'Port 587 STARTTLS (IPv4)',
+      name: 'Port 587 STARTTLS (Strict IPv4)',
       options: {
         host: 'smtp.gmail.com',
         port: 587,
         secure: false,
         requireTLS: true,
         auth: { user: cfg.emailFrom, pass: cfg.emailAppPassword },
-        connectionTimeout: 6000,
-        greetingTimeout: 6000,
-        socketTimeout: 6000,
+        connectionTimeout: 7000,
+        greetingTimeout: 7000,
+        socketTimeout: 7000,
         family: 4,
+        lookup: strictIpv4Lookup,
+      },
+    });
+
+    // 3. Gmail Service Preset with Strict IPv4 Lookup
+    strategies.push({
+      name: 'Gmail Service Preset (Strict IPv4)',
+      options: {
+        service: 'gmail',
+        auth: { user: cfg.emailFrom, pass: cfg.emailAppPassword },
+        connectionTimeout: 7000,
+        greetingTimeout: 7000,
+        socketTimeout: 7000,
+        family: 4,
+        lookup: strictIpv4Lookup,
       },
     });
   } else {
@@ -106,10 +121,11 @@ async function dispatchMailWithFallback(
         port: cfg.smtpPort,
         secure: cfg.smtpPort === 465,
         auth: { user: cfg.emailFrom, pass: cfg.emailAppPassword },
-        connectionTimeout: 6000,
-        greetingTimeout: 6000,
-        socketTimeout: 6000,
+        connectionTimeout: 7000,
+        greetingTimeout: 7000,
+        socketTimeout: 7000,
         family: 4,
+        lookup: strictIpv4Lookup,
       },
     });
   }
@@ -135,8 +151,8 @@ async function dispatchMailWithFallback(
     }
   }
 
-  if (lastError.includes('ETIMEDOUT') || lastError.includes('ECONNREFUSED') || lastError.toLowerCase().includes('timeout')) {
-    lastError = 'Connection to Gmail SMTP timed out. Cloud firewall or network blocked ports 465/587.';
+  if (lastError.includes('ENETUNREACH') || lastError.includes('ETIMEDOUT') || lastError.includes('ECONNREFUSED')) {
+    lastError = `Network connection error (${lastError}). The server was unable to reach Gmail SMTP over IPv4.`;
   }
 
   return { success: false, error: lastError };
