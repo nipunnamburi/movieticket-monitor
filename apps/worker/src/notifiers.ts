@@ -161,6 +161,8 @@ export async function sendEmailAlert(
     </html>
   `;
 
+  let resendErrorMsg = '';
+
   // 1. Primary: Resend Service API
   if (cfg.resendApiKey) {
     try {
@@ -174,18 +176,20 @@ export async function sendEmailAlert(
       });
 
       if (result.error) {
+        resendErrorMsg = result.error.message || 'Resend delivery failed';
         console.warn('[Notifier] Resend API error:', result.error);
         if (!cfg.emailFrom || !cfg.emailAppPassword) {
-          return { success: false, error: result.error.message || 'Resend delivery failed' };
+          return { success: false, error: `Resend error: ${resendErrorMsg}` };
         }
       } else {
         console.log(`[Notifier] Email alert delivered via Resend to ${to} (id: ${result.data?.id})`);
         return { success: true };
       }
     } catch (err: any) {
-      console.warn('[Notifier] Resend dispatch exception, attempting SMTP fallback if configured:', err.message);
+      resendErrorMsg = err.message || String(err);
+      console.warn('[Notifier] Resend dispatch exception, attempting SMTP fallback if configured:', resendErrorMsg);
       if (!cfg.emailFrom || !cfg.emailAppPassword) {
-        return { success: false, error: err.message || String(err) };
+        return { success: false, error: `Resend error: ${resendErrorMsg}` };
       }
     }
   }
@@ -200,6 +204,9 @@ export async function sendEmailAlert(
         user: cfg.emailFrom,
         pass: cfg.emailAppPassword,
       },
+      connectionTimeout: 8000,
+      greetingTimeout: 8000,
+      socketTimeout: 8000,
     });
 
     await transporter.sendMail({
@@ -212,7 +219,11 @@ export async function sendEmailAlert(
     return { success: true };
   } catch (err: any) {
     console.error('[Notifier] SMTP dispatch error:', err);
-    return { success: false, error: err.message || String(err) };
+    const smtpErrorMsg = err.message || String(err);
+    if (resendErrorMsg) {
+      return { success: false, error: `Resend error: ${resendErrorMsg} | SMTP fallback error: ${smtpErrorMsg}` };
+    }
+    return { success: false, error: `SMTP error: ${smtpErrorMsg}` };
   }
 }
 
