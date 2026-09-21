@@ -207,7 +207,8 @@ export async function sendEmailAlert(
       connectionTimeout: 8000,
       greetingTimeout: 8000,
       socketTimeout: 8000,
-    });
+      family: 4,
+    } as any);
 
     await transporter.sendMail({
       from: `"BookMyShow Monitor" <${cfg.emailFrom}>`,
