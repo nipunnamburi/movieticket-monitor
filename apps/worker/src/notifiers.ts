@@ -50,7 +50,7 @@ export async function getNotificationConfig(): Promise<NotificationConfig> {
   const emailAppPassword = (settingsMap['EMAIL_APP_PASSWORD'] || process.env.EMAIL_APP_PASSWORD || '').replace(/\s+/g, '');
   const defaultEmailTo = settingsMap['DEFAULT_EMAIL_TO'] || process.env.DEFAULT_EMAIL_TO || emailFrom;
   const smtpHost = settingsMap['SMTP_HOST'] || process.env.SMTP_HOST || 'smtp.gmail.com';
-  const smtpPort = Number(settingsMap['SMTP_PORT'] || process.env.SMTP_PORT) || 587;
+  const smtpPort = Number(settingsMap['SMTP_PORT'] || process.env.SMTP_PORT) || 465;
 
   const twilioSid = settingsMap['TWILIO_ACCOUNT_SID'] || process.env.TWILIO_ACCOUNT_SID || '';
   const twilioToken = settingsMap['TWILIO_AUTH_TOKEN'] || process.env.TWILIO_AUTH_TOKEN || '';
