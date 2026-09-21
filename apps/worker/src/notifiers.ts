@@ -46,21 +46,100 @@ export async function getNotificationConfig(): Promise<NotificationConfig> {
   };
 }
 
-function createGmailTransporter(cfg: NotificationConfig) {
-  const isSecure = cfg.smtpPort === 465;
-  return nodemailer.createTransport({
-    host: cfg.smtpHost,
-    port: cfg.smtpPort,
-    secure: isSecure,
-    auth: {
-      user: cfg.emailFrom,
-      pass: cfg.emailAppPassword,
-    },
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 10000,
-    family: 4, // Force IPv4 to prevent cloud/mac IPv6 connection timeouts
-  } as any);
+async function dispatchMailWithFallback(
+  cfg: NotificationConfig,
+  mailOptions: { from: string; to: string; subject: string; html: string }
+): Promise<{ success: boolean; error?: string }> {
+  const isGmail = cfg.emailFrom.includes('@gmail.') || cfg.smtpHost.includes('gmail');
+
+  const strategies: Array<{ name: string; options: any }> = [];
+
+  if (isGmail) {
+    // 1. Gmail Service preset
+    strategies.push({
+      name: 'Gmail Service Preset',
+      options: {
+        service: 'gmail',
+        auth: { user: cfg.emailFrom, pass: cfg.emailAppPassword },
+        connectionTimeout: 6000,
+        greetingTimeout: 6000,
+        socketTimeout: 6000,
+      },
+    });
+
+    // 2. Port 465 SSL (IPv4)
+    strategies.push({
+      name: 'Port 465 SSL (IPv4)',
+      options: {
+        host: 'smtp.gmail.com',
+        port: 465,
+        secure: true,
+        auth: { user: cfg.emailFrom, pass: cfg.emailAppPassword },
+        connectionTimeout: 6000,
+        greetingTimeout: 6000,
+        socketTimeout: 6000,
+        family: 4,
+      },
+    });
+
+    // 3. Port 587 STARTTLS (IPv4)
+    strategies.push({
+      name: 'Port 587 STARTTLS (IPv4)',
+      options: {
+        host: 'smtp.gmail.com',
+        port: 587,
+        secure: false,
+        requireTLS: true,
+        auth: { user: cfg.emailFrom, pass: cfg.emailAppPassword },
+        connectionTimeout: 6000,
+        greetingTimeout: 6000,
+        socketTimeout: 6000,
+        family: 4,
+      },
+    });
+  } else {
+    // Custom SMTP server config
+    strategies.push({
+      name: `Custom SMTP ${cfg.smtpHost}:${cfg.smtpPort}`,
+      options: {
+        host: cfg.smtpHost,
+        port: cfg.smtpPort,
+        secure: cfg.smtpPort === 465,
+        auth: { user: cfg.emailFrom, pass: cfg.emailAppPassword },
+        connectionTimeout: 6000,
+        greetingTimeout: 6000,
+        socketTimeout: 6000,
+        family: 4,
+      },
+    });
+  }
+
+  let lastError = 'Unknown connection error';
+
+  for (const strategy of strategies) {
+    try {
+      const transporter = nodemailer.createTransport(strategy.options as any);
+      await transporter.sendMail(mailOptions);
+      console.log(`[Notifier] Email successfully delivered using ${strategy.name} to ${mailOptions.to}`);
+      return { success: true };
+    } catch (err: any) {
+      console.warn(`[Notifier] Attempt with ${strategy.name} failed:`, err.message || err);
+      let errMsg = err.message || String(err);
+      if (errMsg.includes('535-5.7.8') || errMsg.includes('Username and Password not accepted')) {
+        return {
+          success: false,
+          error: 'Gmail App Password invalid or rejected. Please generate a 16-character App Password at myaccount.google.com/apppasswords',
+        };
+      }
+      lastError = errMsg;
+    }
+  }
+
+  if (lastError.includes('ETIMEDOUT') || lastError.includes('ECONNREFUSED') || lastError.toLowerCase().includes('timeout')) {
+    lastError = 'Connection to Gmail SMTP timed out. Cloud firewall or network blocked ports 465/587.';
+  }
+
+  return { success: false, error: lastError };
 }
 
 // ── Send Ticket Drop Email Alert ──────────────────────────────────────────────
@@ -151,26 +230,12 @@ export async function sendEmailAlert(
     </html>
   `;
 
-  try {
-    const transporter = createGmailTransporter(cfg);
-    await transporter.sendMail({
-      from: `"BookMyShow Monitor" <${cfg.emailFrom}>`,
-      to,
-      subject,
-      html,
-    });
-    console.log(`[Notifier] Ticket alert email sent successfully to ${to}`);
-    return { success: true };
-  } catch (err: any) {
-    console.error('[Notifier] Gmail SMTP dispatch error:', err);
-    let errMsg = err.message || String(err);
-    if (errMsg.includes('535-5.7.8') || errMsg.includes('Username and Password not accepted')) {
-      errMsg = 'Gmail App Password invalid or rejected. Please generate a 16-character App Password at myaccount.google.com/apppasswords';
-    } else if (errMsg.includes('ETIMEDOUT') || errMsg.includes('ECONNREFUSED')) {
-      errMsg = 'Connection to Gmail SMTP timed out. Check network or firewall settings.';
-    }
-    return { success: false, error: errMsg };
-  }
+  return dispatchMailWithFallback(cfg, {
+    from: `"BookMyShow Monitor" <${cfg.emailFrom}>`,
+    to,
+    subject,
+    html,
+  });
 }
 
 // ── Send Test Email (Diagnostic) ──────────────────────────────────────────────
@@ -192,41 +257,24 @@ export async function sendTestEmail(recipientEmail?: string): Promise<{ success:
     };
   }
 
-  try {
-    const transporter = createGmailTransporter(cfg);
-    await transporter.verify();
-
-    await transporter.sendMail({
-      from: `"BookMyShow Monitor" <${cfg.emailFrom}>`,
-      to,
-      subject: '✅ BookMyShow Monitor — Test Email Successful!',
-      html: `
-        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #09090b; color: #f4f4f5; padding: 24px;">
-          <div style="max-width: 500px; margin: 0 auto; background: #12121c; border: 1px solid #27272a; border-radius: 12px; padding: 24px;">
-            <h2 style="color: #10b981; margin-top: 0;">🎉 Test Email Received!</h2>
-            <p style="color: #a1a1aa; font-size: 14px;">
-              Your Gmail SMTP notification pipeline is working correctly.
-            </p>
-            <div style="background: #181825; padding: 12px; border-radius: 8px; font-size: 13px; color: #71717a;">
-              <div><strong>Sender:</strong> ${cfg.emailFrom}</div>
-              <div><strong>Recipient:</strong> ${to}</div>
-              <div><strong>Timestamp:</strong> ${new Date().toISOString()}</div>
-            </div>
+  return dispatchMailWithFallback(cfg, {
+    from: `"BookMyShow Monitor" <${cfg.emailFrom}>`,
+    to,
+    subject: '✅ BookMyShow Monitor — Test Email Successful!',
+    html: `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #09090b; color: #f4f4f5; padding: 24px;">
+        <div style="max-width: 500px; margin: 0 auto; background: #12121c; border: 1px solid #27272a; border-radius: 12px; padding: 24px;">
+          <h2 style="color: #10b981; margin-top: 0;">🎉 Test Email Received!</h2>
+          <p style="color: #a1a1aa; font-size: 14px;">
+            Your Gmail SMTP notification pipeline is working correctly.
+          </p>
+          <div style="background: #181825; padding: 12px; border-radius: 8px; font-size: 13px; color: #71717a;">
+            <div><strong>Sender:</strong> ${cfg.emailFrom}</div>
+            <div><strong>Recipient:</strong> ${to}</div>
+            <div><strong>Timestamp:</strong> ${new Date().toISOString()}</div>
           </div>
         </div>
-      `,
-    });
-
-    console.log(`[Notifier] Test email delivered successfully to ${to}`);
-    return { success: true };
-  } catch (err: any) {
-    console.error('[Notifier] Test email failed:', err);
-    let errMsg = err.message || String(err);
-    if (errMsg.includes('535-5.7.8') || errMsg.includes('Username and Password not accepted')) {
-      errMsg = 'Gmail App Password invalid. Ensure 2-Step Verification is active and generate a new 16-character App Password at myaccount.google.com/apppasswords';
-    } else if (errMsg.includes('ETIMEDOUT') || errMsg.includes('ECONNREFUSED')) {
-      errMsg = 'Connection to Gmail SMTP timed out. Check port (465/587) or network access.';
-    }
-    return { success: false, error: errMsg };
-  }
+      </div>
+    `,
+  });
 }
