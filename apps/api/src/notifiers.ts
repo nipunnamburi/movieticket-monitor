@@ -1,6 +1,4 @@
 import nodemailer from 'nodemailer';
-import twilio from 'twilio';
-import { Resend } from 'resend';
 import { ShowOpening } from '@bms/shared';
 import { prisma } from '@bms/db';
 import dotenv from 'dotenv';
@@ -13,20 +11,12 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
 export interface NotificationConfig {
-  resendApiKey: string;
-  resendFrom: string;
   emailFrom: string;
   emailAppPassword: string;
   defaultEmailTo: string;
   smtpHost: string;
   smtpPort: number;
-  twilioSid: string;
-  twilioToken: string;
-  twilioFrom: string;
-  callmebotKey: string;
-  defaultWhatsappTo: string;
   isEmailConfigured: boolean;
-  isWhatsappConfigured: boolean;
 }
 
 export async function getNotificationConfig(): Promise<NotificationConfig> {
@@ -40,43 +30,40 @@ export async function getNotificationConfig(): Promise<NotificationConfig> {
     console.warn('[Notifier] Could not load system settings from DB:', err);
   }
 
-  const resendApiKey = settingsMap['RESEND_API_KEY'] || process.env.RESEND_API_KEY || '';
-  let resendFrom = settingsMap['RESEND_FROM'] || process.env.RESEND_FROM || 'BookMyShow Alerts <onboarding@resend.dev>';
-  if (resendFrom.includes('@gmail.') || resendFrom.includes('@yahoo.') || resendFrom.includes('@outlook.') || resendFrom.includes('@hotmail.')) {
-    resendFrom = 'BookMyShow Alerts <onboarding@resend.dev>';
-  }
-
   const emailFrom = settingsMap['EMAIL_FROM'] || process.env.EMAIL_FROM || '';
   const emailAppPassword = (settingsMap['EMAIL_APP_PASSWORD'] || process.env.EMAIL_APP_PASSWORD || '').replace(/\s+/g, '');
   const defaultEmailTo = settingsMap['DEFAULT_EMAIL_TO'] || process.env.DEFAULT_EMAIL_TO || emailFrom;
   const smtpHost = settingsMap['SMTP_HOST'] || process.env.SMTP_HOST || 'smtp.gmail.com';
   const smtpPort = Number(settingsMap['SMTP_PORT'] || process.env.SMTP_PORT) || 465;
 
-  const twilioSid = settingsMap['TWILIO_ACCOUNT_SID'] || process.env.TWILIO_ACCOUNT_SID || '';
-  const twilioToken = settingsMap['TWILIO_AUTH_TOKEN'] || process.env.TWILIO_AUTH_TOKEN || '';
-  const twilioFrom = settingsMap['TWILIO_WHATSAPP_FROM'] || process.env.TWILIO_WHATSAPP_FROM || 'whatsapp:+14155238886';
-  const callmebotKey = settingsMap['CALLMEBOT_API_KEY'] || process.env.CALLMEBOT_API_KEY || '';
-  const defaultWhatsappTo = settingsMap['DEFAULT_WHATSAPP_TO'] || process.env.DEFAULT_WHATSAPP_TO || '';
-
   return {
-    resendApiKey,
-    resendFrom,
     emailFrom,
     emailAppPassword,
     defaultEmailTo,
     smtpHost,
     smtpPort,
-    twilioSid,
-    twilioToken,
-    twilioFrom,
-    callmebotKey,
-    defaultWhatsappTo,
-    isEmailConfigured: Boolean(resendApiKey || (emailFrom && emailAppPassword)),
-    isWhatsappConfigured: Boolean(callmebotKey || (twilioSid && twilioToken)),
+    isEmailConfigured: Boolean(emailFrom && emailAppPassword),
   };
 }
 
-// ── Email Notifier (Resend / Gmail SMTP) ──────────────────────────────────────
+function createGmailTransporter(cfg: NotificationConfig) {
+  const isSecure = cfg.smtpPort === 465;
+  return nodemailer.createTransport({
+    host: cfg.smtpHost,
+    port: cfg.smtpPort,
+    secure: isSecure,
+    auth: {
+      user: cfg.emailFrom,
+      pass: cfg.emailAppPassword,
+    },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 10000,
+    family: 4, // Force IPv4 to prevent cloud/mac IPv6 connection timeouts
+  } as any);
+}
+
+// ── Send Ticket Drop Email Alert ──────────────────────────────────────────────
 export async function sendEmailAlert(
   recipientEmail: string,
   monitorName: string,
@@ -88,7 +75,7 @@ export async function sendEmailAlert(
   const to = recipientEmail || cfg.defaultEmailTo || cfg.emailFrom;
 
   if (!cfg.emailFrom || !cfg.emailAppPassword) {
-    const msg = 'No Gmail SMTP credentials configured (requires EMAIL_FROM + EMAIL_APP_PASSWORD)';
+    const msg = 'Gmail SMTP credentials not configured (requires EMAIL_FROM + EMAIL_APP_PASSWORD)';
     console.warn(`[Notifier] ${msg}`);
     return { success: false, error: msg };
   }
@@ -101,7 +88,7 @@ export async function sendEmailAlert(
   const subject = `🔔 BMS Alert: ${monitorName} (${city}) — ${openings.length} Show(s) Bookable Now!`;
 
   const rows = openings
-    .slice(0, 15)
+    .slice(0, 20)
     .map(
       (op) => `
       <tr style="border-bottom: 1px solid #27272a;">
@@ -124,7 +111,7 @@ export async function sendEmailAlert(
     <head>
       <meta charset="utf-8">
       <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #09090b; color: #f4f4f5; margin: 0; padding: 24px; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #09090b; color: #f4f4f5; margin: 0; padding: 24px; }
         .card { max-width: 600px; margin: 0 auto; background: #12121c; border: 1px solid #27272a; border-radius: 14px; overflow: hidden; }
         .hdr { background: #e50914; padding: 20px 24px; }
         .hdr h1 { margin: 0; font-size: 20px; color: #fff; }
@@ -164,163 +151,85 @@ export async function sendEmailAlert(
     </html>
   `;
 
-  /*
-  // 1. Primary: Resend Service API (Disabled for now - using Gmail SMTP directly)
-  if (cfg.resendApiKey) {
-    try {
-      const resend = new Resend(cfg.resendApiKey);
-      const from = cfg.resendFrom || 'BookMyShow Alerts <onboarding@resend.dev>';
-      const result = await resend.emails.send({
-        from,
-        to: [to],
-        subject,
-        html,
-      });
-
-      if (result.error) {
-        resendErrorMsg = result.error.message || 'Resend delivery failed';
-        console.warn('[Notifier] Resend API error:', result.error);
-        if (!cfg.emailFrom || !cfg.emailAppPassword) {
-          return { success: false, error: `Resend error: ${resendErrorMsg}` };
-        }
-      } else {
-        console.log(`[Notifier] Email alert delivered via Resend to ${to} (id: ${result.data?.id})`);
-        return { success: true };
-      }
-    } catch (err: any) {
-      resendErrorMsg = err.message || String(err);
-      console.warn('[Notifier] Resend dispatch exception, attempting SMTP fallback if configured:', resendErrorMsg);
-      if (!cfg.emailFrom || !cfg.emailAppPassword) {
-        return { success: false, error: `Resend error: ${resendErrorMsg}` };
-      }
-    }
-  }
-  */
-
-  // 2. Fallback: Nodemailer SMTP (Gmail / Custom SMTP)
   try {
-    const transporter = nodemailer.createTransport({
-      host: cfg.smtpHost,
-      port: cfg.smtpPort,
-      secure: cfg.smtpPort === 465,
-      auth: {
-        user: cfg.emailFrom,
-        pass: cfg.emailAppPassword,
-      },
-      connectionTimeout: 8000,
-      greetingTimeout: 8000,
-      socketTimeout: 8000,
-      family: 4,
-    } as any);
-
+    const transporter = createGmailTransporter(cfg);
     await transporter.sendMail({
       from: `"BookMyShow Monitor" <${cfg.emailFrom}>`,
       to,
       subject,
       html,
     });
-    console.log(`[Notifier] Email alert delivered via SMTP to ${to}`);
+    console.log(`[Notifier] Ticket alert email sent successfully to ${to}`);
     return { success: true };
   } catch (err: any) {
-    console.error('[Notifier] SMTP dispatch error:', err);
-    const smtpErrorMsg = err.message || String(err);
-    return { success: false, error: `SMTP error: ${smtpErrorMsg}` };
+    console.error('[Notifier] Gmail SMTP dispatch error:', err);
+    let errMsg = err.message || String(err);
+    if (errMsg.includes('535-5.7.8') || errMsg.includes('Username and Password not accepted')) {
+      errMsg = 'Gmail App Password invalid or rejected. Please generate a 16-character App Password at myaccount.google.com/apppasswords';
+    } else if (errMsg.includes('ETIMEDOUT') || errMsg.includes('ECONNREFUSED')) {
+      errMsg = 'Connection to Gmail SMTP timed out. Check network or firewall settings.';
+    }
+    return { success: false, error: errMsg };
   }
 }
 
-// ── WhatsApp Notifier (Twilio & CallMeBot) ─────────────────────────────────────
-export async function sendWhatsAppAlert(
-  recipientPhone: string,
-  monitorName: string,
-  city: string,
-  url: string,
-  openings: ShowOpening[]
-): Promise<{ success: boolean; error?: string }> {
+// ── Send Test Email (Diagnostic) ──────────────────────────────────────────────
+export async function sendTestEmail(recipientEmail?: string): Promise<{ success: boolean; error?: string; details?: any }> {
   const cfg = await getNotificationConfig();
-  const phone = recipientPhone || cfg.defaultWhatsappTo;
-  if (!phone) {
-    const msg = 'No recipient WhatsApp phone number specified';
-    console.warn(`[Notifier] ${msg}`);
-    return { success: false, error: msg };
+  const to = recipientEmail || cfg.defaultEmailTo || cfg.emailFrom;
+
+  if (!cfg.emailFrom || !cfg.emailAppPassword) {
+    return {
+      success: false,
+      error: 'Gmail SMTP credentials missing. Please configure EMAIL_FROM and EMAIL_APP_PASSWORD.',
+    };
   }
 
-  if (!cfg.isWhatsappConfigured) {
-    const msg = 'No WhatsApp credentials configured (requires CallMeBot API key or Twilio SID/Auth Token)';
-    console.warn(`[Notifier] ${msg}`);
-    return { success: false, error: msg };
+  if (!to) {
+    return {
+      success: false,
+      error: 'No recipient email specified for test alert.',
+    };
   }
 
-  // Format clean international phone number
-  const formattedPhone = phone.startsWith('+') ? phone : `+91${phone.replace(/\D/g, '')}`;
-  const messageBody = [
-    `🚨 *BOOKMYSHOW TICKET ALERT!* 🎬`,
-    `*Movie:* ${monitorName}`,
-    `*City:* ${city}`,
-    `*Openings:* ${openings.length} shows bookable right now!`,
-    '',
-    ...openings.slice(0, 5).map((op) => `• *${op.theatre}*\n  📅 ${op.date} | ⏰ ${op.showtime}\n  ${op.change}`),
-    '',
-    `🎟️ *Book Now:* ${url}`,
-  ].join('\n');
+  try {
+    const transporter = createGmailTransporter(cfg);
 
-  // ── Primary Provider: Twilio (WhatsApp & SMS) ──────────────────────────────
-  if (cfg.twilioSid && cfg.twilioToken) {
-    try {
-      const client = twilio(cfg.twilioSid, cfg.twilioToken);
-      const fromNumber = cfg.twilioFrom || 'whatsapp:+14155238886';
-      const toNumber = fromNumber.startsWith('whatsapp:')
-        ? (formattedPhone.startsWith('whatsapp:') ? formattedPhone : `whatsapp:${formattedPhone}`)
-        : formattedPhone.replace('whatsapp:', '');
+    // Verify SMTP connection handshake first
+    await transporter.verify();
 
-      const msg = await client.messages.create({
-        from: fromNumber,
-        to: toNumber,
-        body: messageBody,
-      });
+    // Send test email
+    await transporter.sendMail({
+      from: `"BookMyShow Monitor" <${cfg.emailFrom}>`,
+      to,
+      subject: '✅ BookMyShow Monitor — Test Email Successful!',
+      html: `
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #09090b; color: #f4f4f5; padding: 24px;">
+          <div style="max-width: 500px; margin: 0 auto; background: #12121c; border: 1px solid #27272a; border-radius: 12px; padding: 24px;">
+            <h2 style="color: #10b981; margin-top: 0;">🎉 Test Email Received!</h2>
+            <p style="color: #a1a1aa; font-size: 14px;">
+              Your Gmail SMTP notification pipeline is working correctly.
+            </p>
+            <div style="background: #181825; padding: 12px; border-radius: 8px; font-size: 13px; color: #71717a;">
+              <div><strong>Sender:</strong> ${cfg.emailFrom}</div>
+              <div><strong>Recipient:</strong> ${to}</div>
+              <div><strong>Timestamp:</strong> ${new Date().toISOString()}</div>
+            </div>
+          </div>
+        </div>
+      `,
+    });
 
-      // Wait briefly for Twilio sandbox routing confirmation
-      await new Promise((r) => setTimeout(r, 1200));
-      const verified = await client.messages(msg.sid).fetch();
-
-      if (verified.status === 'failed' || verified.status === 'undelivered') {
-        let errDetails = `Twilio delivery ${verified.status} (code: ${verified.errorCode || 'unknown'})`;
-        if (verified.errorCode === 63015 || verified.errorCode === 63007) {
-          errDetails = `Twilio Sandbox Opt-in Required: Your phone number (${toNumber}) has not joined or has expired from the Twilio WhatsApp Sandbox. Please open WhatsApp on your phone and send "join nodded-substance" (or check your sandbox keyword in Twilio Console) to +1 415 523 8886.`;
-        } else if (verified.errorMessage) {
-          errDetails += `: ${verified.errorMessage}`;
-        }
-        console.error(`[Notifier] ${errDetails}`);
-        return { success: false, error: errDetails };
-      }
-
-      console.log(`[Notifier] Alert dispatched via Twilio to ${toNumber} (status: ${verified.status})`);
-      return { success: true };
-    } catch (err: any) {
-      console.error('[Notifier] Twilio dispatch error:', err);
-      if (!cfg.callmebotKey) {
-        return { success: false, error: `Twilio error: ${err.message || String(err)}` };
-      }
+    console.log(`[Notifier] Test email delivered successfully to ${to}`);
+    return { success: true };
+  } catch (err: any) {
+    console.error('[Notifier] Test email failed:', err);
+    let errMsg = err.message || String(err);
+    if (errMsg.includes('535-5.7.8') || errMsg.includes('Username and Password not accepted')) {
+      errMsg = 'Gmail App Password invalid. Ensure 2-Step Verification is active and generate a new 16-character App Password at myaccount.google.com/apppasswords';
+    } else if (errMsg.includes('ETIMEDOUT') || errMsg.includes('ECONNREFUSED')) {
+      errMsg = 'Connection to Gmail SMTP timed out. Check port (465/587) or network access.';
     }
+    return { success: false, error: errMsg };
   }
-
-  // ── Fallback Provider: CallMeBot Free WhatsApp API ──────────────────────────
-  if (cfg.callmebotKey) {
-    try {
-      const encodedMsg = encodeURIComponent(messageBody);
-      const cleanPhoneDigits = formattedPhone.replace('+', '');
-      const cmbUrl = `https://api.callmebot.com/whatsapp.php?phone=${cleanPhoneDigits}&text=${encodedMsg}&apikey=${cfg.callmebotKey}`;
-      const res = await fetch(cmbUrl);
-      if (res.ok) {
-        console.log(`[Notifier] WhatsApp alert sent via CallMeBot fallback to ${formattedPhone}`);
-        return { success: true };
-      }
-      const text = await res.text();
-      return { success: false, error: `CallMeBot HTTP ${res.status}: ${text}` };
-    } catch (err: any) {
-      console.error('[Notifier] CallMeBot WhatsApp exception:', err);
-      return { success: false, error: err.message };
-    }
-  }
-
-  return { success: false, error: 'No active WhatsApp/SMS provider available (configure Twilio in Settings)' };
 }

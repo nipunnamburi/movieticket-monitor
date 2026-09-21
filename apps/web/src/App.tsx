@@ -259,49 +259,24 @@ export default function App() {
     return sessionStorage.getItem('bms_dismiss_email_banner') === 'true';
   });
   const [notifConfig, setNotifConfig] = useState<{
-    resendApiKey?: string;
-    hasResendKey: boolean;
-    resendFrom: string;
     emailFrom: string;
     hasAppPassword: boolean;
     defaultEmailTo: string;
-    twilioSid: string;
-    hasTwilioToken: boolean;
-    twilioFrom: string;
-    callmebotKey: string;
-    hasCallmebotKey: boolean;
-    defaultWhatsappTo: string;
-    hasTwilio: boolean;
+    smtpHost: string;
+    smtpPort: number;
     isEmailConfigured: boolean;
-    isWhatsappConfigured: boolean;
   }>({
-    hasResendKey: false,
-    resendFrom: 'BookMyShow Alerts <onboarding@resend.dev>',
     emailFrom: '',
     hasAppPassword: false,
     defaultEmailTo: '',
-    twilioSid: '',
-    hasTwilioToken: false,
-    twilioFrom: 'whatsapp:+14155238886',
-    callmebotKey: '',
-    hasCallmebotKey: false,
-    defaultWhatsappTo: '',
-    hasTwilio: false,
+    smtpHost: 'smtp.gmail.com',
+    smtpPort: 465,
     isEmailConfigured: false,
-    isWhatsappConfigured: false,
   });
 
-  const [cfgResendApiKey, setCfgResendApiKey] = useState('');
-  const [cfgResendFrom, setCfgResendFrom] = useState('BookMyShow Alerts <onboarding@resend.dev>');
-  const [emailProviderType, setEmailProviderType] = useState<'resend' | 'gmail'>('resend');
   const [cfgEmailFrom, setCfgEmailFrom] = useState('');
   const [cfgEmailAppPassword, setCfgEmailAppPassword] = useState('');
   const [cfgDefaultEmailTo, setCfgDefaultEmailTo] = useState('');
-  const [cfgTwilioSid, setCfgTwilioSid] = useState('');
-  const [cfgTwilioToken, setCfgTwilioToken] = useState('');
-  const [cfgTwilioFrom, setCfgTwilioFrom] = useState('whatsapp:+14155238886');
-  const [cfgCallmebotKey, setCfgCallmebotKey] = useState('');
-  const [cfgDefaultWhatsappTo, setCfgDefaultWhatsappTo] = useState('');
   const [settingsStatus, setSettingsStatus] = useState<string | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
@@ -341,13 +316,8 @@ export default function App() {
         const data = await safeJson(res);
         if (data) {
           setNotifConfig(data);
-          setCfgResendFrom(data.resendFrom || 'BookMyShow Alerts <onboarding@resend.dev>');
           setCfgEmailFrom(data.emailFrom || '');
           setCfgDefaultEmailTo(data.defaultEmailTo || '');
-          setCfgTwilioSid(data.twilioSid || '');
-          setCfgTwilioFrom(data.twilioFrom || 'whatsapp:+14155238886');
-          setCfgCallmebotKey(data.callmebotKey || '');
-          setCfgDefaultWhatsappTo(data.defaultWhatsappTo || '');
         }
       }
     } catch (err) {
@@ -364,24 +334,15 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          resendApiKey: cfgResendApiKey || undefined,
-          resendFrom: cfgResendFrom || undefined,
           emailFrom: cfgEmailFrom,
           emailAppPassword: cfgEmailAppPassword || undefined,
           defaultEmailTo: cfgDefaultEmailTo,
-          twilioSid: cfgTwilioSid,
-          twilioToken: cfgTwilioToken || undefined,
-          twilioFrom: cfgTwilioFrom,
-          callmebotKey: cfgCallmebotKey,
-          defaultWhatsappTo: cfgDefaultWhatsappTo,
         }),
       });
       const data = await safeJson(res);
       if (res.ok) {
         setSettingsStatus('✅ Settings saved successfully!');
-        setCfgResendApiKey('');
         setCfgEmailAppPassword('');
-        setCfgTwilioToken('');
         await fetchSettings();
         setTimeout(() => setSettingsStatus(null), 3500);
       } else {
@@ -3388,177 +3349,76 @@ export default function App() {
             </p>
 
             <form onSubmit={handleSaveSettings} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {/* Section 1: Email Alert Provider (Resend or Gmail SMTP) - RECOMMENDED PRIORITY */}
+              {/* Section 1: Gmail SMTP Alert Service */}
               <div
                 style={{
-                  background: 'linear-gradient(180deg, rgba(16, 185, 129, 0.06) 0%, rgba(255, 255, 255, 0.02) 100%)',
-                  border: '1px solid rgba(16, 185, 129, 0.35)',
+                  background: 'linear-gradient(180deg, rgba(229, 9, 20, 0.05) 0%, rgba(255, 255, 255, 0.02) 100%)',
+                  border: '1px solid rgba(229, 9, 20, 0.25)',
                   borderRadius: '12px',
                   padding: '16px',
                   boxShadow: '0 4px 16px rgba(0, 0, 0, 0.2)',
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', flexWrap: 'wrap', gap: '6px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', flexWrap: 'wrap', gap: '6px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: 'rgba(16, 185, 129, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <Mail size={16} color="#34d399" />
+                    <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: 'rgba(229, 9, 20, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <Mail size={16} color="var(--bms-red)" />
                     </div>
                     <div>
-                      <div style={{ fontWeight: 700, fontSize: '0.92rem' }}>Email Alert Service</div>
-                      <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Resend API or Google App Password</div>
+                      <div style={{ fontWeight: 700, fontSize: '0.92rem' }}>Gmail SMTP Notification Service</div>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Delivers instant ticket alerts to your inbox</div>
                     </div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span
-                      style={{
-                        fontSize: '0.68rem',
-                        fontWeight: 700,
-                        padding: '3px 8px',
-                        borderRadius: '12px',
-                        background: 'rgba(16, 185, 129, 0.2)',
-                        color: '#34d399',
-                        border: '1px solid rgba(16, 185, 129, 0.4)',
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.3px',
-                      }}
-                    >
-                      ⭐ Recommended (Free & 100% Reliable)
-                    </span>
                     <span style={{ fontSize: '0.72rem', color: notifConfig.isEmailConfigured ? '#34d399' : '#f87171', fontWeight: 600 }}>
-                      {notifConfig.isEmailConfigured ? '✓ Active' : '⚠ Not Setup'}
+                      {notifConfig.isEmailConfigured ? '✓ Active & Ready' : '⚠ Missing Credentials'}
                     </span>
                   </div>
                 </div>
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '12px' }}>
-                  {/* Provider Radio Toggle */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', background: 'rgba(0, 0, 0, 0.3)', padding: '4px', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
-                    <button
-                      type="button"
-                      onClick={() => setEmailProviderType('resend')}
-                      style={{
-                        padding: '7px 10px',
-                        borderRadius: '6px',
-                        border: 'none',
-                        background: emailProviderType === 'resend' ? 'rgba(6, 182, 212, 0.2)' : 'transparent',
-                        color: emailProviderType === 'resend' ? '#38bdf8' : 'var(--text-secondary)',
-                        fontWeight: 600,
-                        fontSize: '0.78rem',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '6px',
-                        transition: 'all 0.15s ease',
-                      }}
-                    >
-                      <span>⚡ Resend API (Fastest)</span>
-                      {notifConfig.hasResendKey && <span style={{ color: '#34d399', fontSize: '0.7rem' }}>✓</span>}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setEmailProviderType('gmail')}
-                      style={{
-                        padding: '7px 10px',
-                        borderRadius: '6px',
-                        border: 'none',
-                        background: emailProviderType === 'gmail' ? 'rgba(229, 9, 20, 0.18)' : 'transparent',
-                        color: emailProviderType === 'gmail' ? '#f87171' : 'var(--text-secondary)',
-                        fontWeight: 600,
-                        fontSize: '0.78rem',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '6px',
-                        transition: 'all 0.15s ease',
-                      }}
-                    >
-                      <span>✉️ Gmail SMTP</span>
-                      {notifConfig.hasAppPassword && <span style={{ color: '#34d399', fontSize: '0.7rem' }}>✓</span>}
-                    </button>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div>
+                    <label style={{ fontSize: '0.76rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
+                      Sender Gmail Address
+                    </label>
+                    <input
+                      type="email"
+                      className="input-field"
+                      placeholder="youraccount@gmail.com"
+                      value={cfgEmailFrom}
+                      onChange={(e) => setCfgEmailFrom(e.target.value)}
+                    />
                   </div>
 
-                  {/* Resend Fields */}
-                  {emailProviderType === 'resend' && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                      <div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                          <label style={{ fontSize: '0.76rem', fontWeight: 600 }}>
-                            Resend API Key
-                          </label>
-                          <a
-                            href="https://resend.com/api-keys"
-                            target="_blank"
-                            rel="noreferrer"
-                            style={{ color: 'var(--accent-cyan)', fontSize: '0.72rem', textDecoration: 'underline' }}
-                          >
-                            Get free key at resend.com ↗
-                          </a>
-                        </div>
-                        <input
-                          type="password"
-                          className="input-field"
-                          placeholder={notifConfig.hasResendKey ? '•••••••• (Saved — leave blank to keep)' : 're_xxxxxxxxxxxxxxxxxxxx'}
-                          value={cfgResendApiKey}
-                          onChange={(e) => setCfgResendApiKey(e.target.value)}
-                        />
-                      </div>
-
-                      <div>
-                        <label style={{ fontSize: '0.76rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
-                          Sender Address (From)
-                        </label>
-                        <input
-                          type="text"
-                          className="input-field"
-                          placeholder="BookMyShow Alerts <onboarding@resend.dev>"
-                          value={cfgResendFrom}
-                          onChange={(e) => setCfgResendFrom(e.target.value)}
-                        />
-                      </div>
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                      <label style={{ fontSize: '0.76rem', fontWeight: 600 }}>
+                        Google App Password (16-characters)
+                      </label>
+                      <a
+                        href="https://myaccount.google.com/apppasswords"
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ color: 'var(--accent-cyan)', fontSize: '0.72rem', textDecoration: 'underline' }}
+                      >
+                        Generate App Password ↗
+                      </a>
                     </div>
-                  )}
-
-                  {/* Gmail SMTP Fields */}
-                  {emailProviderType === 'gmail' && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                        <div>
-                          <label style={{ fontSize: '0.74rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
-                            Gmail Address
-                          </label>
-                          <input
-                            type="email"
-                            className="input-field"
-                            placeholder="youraccount@gmail.com"
-                            value={cfgEmailFrom}
-                            onChange={(e) => setCfgEmailFrom(e.target.value)}
-                          />
-                        </div>
-                        <div>
-                          <label style={{ fontSize: '0.74rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
-                            Google App Password (16-char)
-                          </label>
-                          <input
-                            type="password"
-                            className="input-field"
-                            placeholder={notifConfig.hasAppPassword ? '•••••••• (Saved)' : 'xxxx xxxx xxxx xxxx'}
-                            value={cfgEmailAppPassword}
-                            onChange={(e) => setCfgEmailAppPassword(e.target.value)}
-                          />
-                        </div>
-                      </div>
-                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                        Requires 2FA enabled on Google Account &rarr; Security &rarr; 2-Step Verification &rarr; App Passwords.
-                      </div>
+                    <input
+                      type="password"
+                      className="input-field"
+                      placeholder={notifConfig.hasAppPassword ? '•••••••••••••••• (Saved — leave blank to keep)' : 'xxxx xxxx xxxx xxxx'}
+                      value={cfgEmailAppPassword}
+                      onChange={(e) => setCfgEmailAppPassword(e.target.value)}
+                    />
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                      Requires 2-Step Verification enabled on your Google Account &rarr; Security &rarr; App Passwords.
                     </div>
-                  )}
+                  </div>
 
                   <div>
                     <label style={{ fontSize: '0.78rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
-                      Default Recipient Email (Where ticket drop alerts are delivered)
+                      Default Recipient Email (Where ticket alerts are sent)
                     </label>
                     <input
                       type="email"
@@ -3568,133 +3428,36 @@ export default function App() {
                       onChange={(e) => setCfgDefaultEmailTo(e.target.value)}
                     />
                   </div>
-                </div>
-              </div>
 
-              {/* Section 2: Twilio Alert Provider (WhatsApp & SMS) - OPTIONAL SECONDARY */}
-              <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-subtle)', borderRadius: '12px', padding: '16px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', flexWrap: 'wrap', gap: '6px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: 'rgba(242, 47, 70, 0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <MessageSquare size={16} color="#f22f46" />
-                    </div>
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: '0.92rem' }}>WhatsApp & SMS Alerts (Twilio)</div>
-                      <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Instant push messages directly to WhatsApp</div>
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span
-                      style={{
-                        fontSize: '0.68rem',
-                        fontWeight: 600,
-                        padding: '2px 7px',
-                        borderRadius: '10px',
-                        background: 'rgba(255, 255, 255, 0.05)',
-                        color: 'var(--text-muted)',
-                        border: '1px solid var(--border-subtle)',
-                      }}
+                  <div style={{ paddingTop: '6px' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ width: '100%', fontSize: '0.8rem', padding: '8px 12px', justifyContent: 'center' }}
+                      onClick={() => handleSendTestAlert(cfgDefaultEmailTo || cfgEmailFrom || currentUser?.email)}
                     >
-                      Optional Secondary
-                    </span>
-                    <span style={{ fontSize: '0.72rem', color: notifConfig.hasTwilio ? '#34d399' : 'var(--text-muted)' }}>
-                      {notifConfig.hasTwilio ? '✓ Configured' : 'Inactive'}
-                    </span>
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  <div>
-                    <label style={{ fontSize: '0.78rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
-                      Twilio Account SID
-                    </label>
-                    <input
-                      type="text"
-                      className="input-field"
-                      placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                      value={cfgTwilioSid}
-                      onChange={(e) => setCfgTwilioSid(e.target.value)}
-                    />
-                  </div>
-
-                  <div>
-                    <label style={{ fontSize: '0.78rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
-                      Twilio Auth Token
-                    </label>
-                    <input
-                      type="password"
-                      className="input-field"
-                      placeholder={notifConfig.hasTwilioToken ? '•••••••••••••••• (Saved — leave blank to keep)' : 'Enter Twilio Auth Token'}
-                      value={cfgTwilioToken}
-                      onChange={(e) => setCfgTwilioToken(e.target.value)}
-                    />
-                  </div>
-
-                  <div>
-                    <label style={{ fontSize: '0.78rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
-                      Twilio Sender Number (From)
-                    </label>
-                    <input
-                      type="text"
-                      className="input-field"
-                      placeholder="whatsapp:+14155238886 or +1234567890"
-                      value={cfgTwilioFrom}
-                      onChange={(e) => setCfgTwilioFrom(e.target.value)}
-                    />
-                    <div
-                      style={{
-                        background: 'rgba(242, 47, 70, 0.08)',
-                        border: '1px solid rgba(242, 47, 70, 0.25)',
-                        borderRadius: '8px',
-                        padding: '10px 12px',
-                        fontSize: '0.78rem',
-                        color: '#fca5a5',
-                        lineHeight: 1.5,
-                        marginTop: '6px',
-                      }}
-                    >
-                      📲 <strong>Twilio WhatsApp Sandbox Step:</strong><br />
-                      Twilio Sandbox will block messages until your phone joins the sandbox. Open WhatsApp on your phone and send <code>join nodded-substance</code> to <strong>+1 415 523 8886</strong>. (If you have a different join code in your Twilio Console, send that code).
-                    </div>
-                  </div>
-
-                  <div>
-                    <label style={{ fontSize: '0.78rem', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
-                      Default Recipient Phone Number
-                    </label>
-                    <input
-                      type="tel"
-                      className="input-field"
-                      placeholder="+919876543210"
-                      value={cfgDefaultWhatsappTo}
-                      onChange={(e) => setCfgDefaultWhatsappTo(e.target.value)}
-                    />
+                      <Bell size={14} /> Send Test Email
+                    </button>
+                    {testStatus && (
+                      <div
+                        style={{
+                          fontSize: '0.78rem',
+                          textAlign: 'center',
+                          padding: '6px 10px',
+                          borderRadius: '6px',
+                          marginTop: '6px',
+                          background: testStatus.startsWith('✅') ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                          color: testStatus.startsWith('✅') ? '#34d399' : '#fca5a5',
+                        }}
+                      >
+                        {testStatus}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
 
-              {/* Optional Secondary: CallMeBot Free WhatsApp API */}
-              <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-subtle)', borderRadius: '10px', padding: '14px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                  <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                    Alternative Free API: CallMeBot (Optional)
-                  </span>
-                  <span style={{ fontSize: '0.72rem', color: notifConfig.hasCallmebotKey ? '#34d399' : 'var(--text-muted)' }}>
-                    {notifConfig.hasCallmebotKey ? 'Configured' : 'Optional'}
-                  </span>
-                </div>
-                <div>
-                  <input
-                    type="text"
-                    className="input-field"
-                    placeholder={notifConfig.hasCallmebotKey ? '•••••••• (Saved — leave blank to keep)' : 'Enter CallMeBot API Key (optional fallback)'}
-                    value={cfgCallmebotKey}
-                    onChange={(e) => setCfgCallmebotKey(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              {/* Section 3: Nearest Theatre to Home Preferences */}
+              {/* Section 2: Nearest Theatre to Home Preferences */}
               <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--border-subtle)', borderRadius: '10px', padding: '16px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, fontSize: '0.9rem' }}>

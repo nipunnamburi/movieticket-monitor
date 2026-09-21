@@ -6,7 +6,7 @@ import crypto from 'crypto';
 import { prisma } from '@bms/db';
 import { computeDiff, extractOpenings, SnapshotShows, ShowOpening } from '@bms/shared';
 import { fetchBmsShows } from './scraper.js';
-import { sendEmailAlert, sendWhatsAppAlert } from './notifiers.js';
+import { sendEmailAlert } from './notifiers.js';
 
 import { fileURLToPath } from 'url';
 
@@ -148,17 +148,6 @@ export const pollWorker = new Worker(
         }
       }
 
-      // 2. WhatsApp Alert (Twilio / CallMeBot)
-      const targetWhatsApp = monitor.whatsappPhone || process.env.DEFAULT_WHATSAPP_TO;
-      if (targetWhatsApp) {
-        const res = await sendWhatsAppAlert(targetWhatsApp, monitor.name, monitor.city, monitor.url, openings);
-        if (res.success) {
-          channelsUsed.push('WHATSAPP');
-        } else {
-          console.warn(`[Worker] WhatsApp alert to ${targetWhatsApp} failed: ${res.error}`);
-        }
-      }
-
       // Record alert log
       await prisma.alertLog.create({
         data: {
@@ -182,37 +171,19 @@ export const alertWorker = new Worker(
   'bms-alert',
   async (job: Job) => {
     const { channel, target, payload } = job.data;
-    console.log(`[AlertWorker] Dispatching alert to ${channel} -> ${target}`);
+    console.log(`[AlertWorker] Dispatching alert to ${channel || 'EMAIL'} -> ${target}`);
 
-    if (channel === 'EMAIL') {
-      const res = await sendEmailAlert(
-        target,
-        payload.monitorName,
-        payload.city,
-        payload.url,
-        payload.openings
-      );
-      if (!res.success) {
-        throw new Error(res.error || 'Failed to send email');
-      }
-      return res;
+    const res = await sendEmailAlert(
+      target,
+      payload.monitorName,
+      payload.city,
+      payload.url,
+      payload.openings
+    );
+    if (!res.success) {
+      throw new Error(res.error || 'Failed to send email');
     }
-
-    if (channel === 'WHATSAPP') {
-      const res = await sendWhatsAppAlert(
-        target,
-        payload.monitorName,
-        payload.city,
-        payload.url,
-        payload.openings
-      );
-      if (!res.success) {
-        throw new Error(res.error || 'Failed to send WhatsApp message');
-      }
-      return res;
-    }
-
-    return { error: `Unsupported channel: ${channel}` };
+    return res;
   },
   { connection: redis }
 );

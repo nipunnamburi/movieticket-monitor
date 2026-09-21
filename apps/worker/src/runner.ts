@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 import { prisma } from '@bms/db';
 import { computeDiff, extractOpenings, SnapshotShows } from '@bms/shared';
 import { fetchBmsShows, closeBrowser } from './scraper.js';
-import { sendEmailAlert, sendWhatsAppAlert } from './notifiers.js';
+import { sendEmailAlert } from './notifiers.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -156,21 +156,10 @@ export async function runAllChecks(targetMonitorId?: string) {
       if (emailTarget) {
         const res = await sendEmailAlert(emailTarget, monitor.name, monitor.city, monitor.url, openings);
         if (res.success) {
-          channelsUsed.push(`email:${emailTarget}`);
+          channelsUsed.push(`EMAIL:${emailTarget}`);
           console.log(`  ✅ Email alert sent to ${emailTarget}`);
         } else {
           console.warn(`  ⚠️ Email alert failed: ${res.error}`);
-        }
-      }
-
-      const waTarget = monitor.whatsappPhone || process.env.DEFAULT_WHATSAPP_TO;
-      if (waTarget) {
-        const res = await sendWhatsAppAlert(waTarget, monitor.name, monitor.city, monitor.url, openings);
-        if (res.success) {
-          channelsUsed.push(`whatsapp:${waTarget}`);
-          console.log(`  ✅ WhatsApp alert sent to ${waTarget}`);
-        } else {
-          console.warn(`  ⚠️ WhatsApp alert failed: ${res.error}`);
         }
       }
 

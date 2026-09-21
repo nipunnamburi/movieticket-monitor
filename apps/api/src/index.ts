@@ -17,7 +17,7 @@ import { prisma } from '@bms/db';
 import { redis, bmsPollQueue, bmsAlertQueue, bmsAlertEvents } from './queue.js';
 import { eventHub } from './events.js';
 import { hashPassword, comparePassword, generateToken, verifyToken, validatePassword } from './auth.js';
-import { sendEmailAlert, sendWhatsAppAlert } from './notifiers.js';
+import { sendEmailAlert, sendTestEmail } from './notifiers.js';
 
 const fastify = Fastify({
   logger: {
@@ -618,7 +618,7 @@ fastify.post('/api/monitors/:id/trigger', async (request, reply) => {
   return { ok: true, message: `Check triggered for ${monitor.name}` };
 });
 
-// ── Notification Settings Endpoints ──────────────────────────────────────────
+// ── Notification Settings Endpoints (Gmail SMTP) ─────────────────────────────
 fastify.get('/api/settings/notifications', async () => {
   const dbSettings = await prisma.systemSetting.findMany();
   const map: Record<string, string> = {};
@@ -626,38 +626,19 @@ fastify.get('/api/settings/notifications', async () => {
     map[s.key] = s.value;
   }
 
-  const resendApiKey = map['RESEND_API_KEY'] || process.env.RESEND_API_KEY || '';
-  const resendFrom = map['RESEND_FROM'] || process.env.RESEND_FROM || 'BookMyShow Alerts <onboarding@resend.dev>';
   const emailFrom = map['EMAIL_FROM'] || process.env.EMAIL_FROM || '';
   const emailAppPassword = map['EMAIL_APP_PASSWORD'] || process.env.EMAIL_APP_PASSWORD || '';
   const defaultEmailTo = map['DEFAULT_EMAIL_TO'] || process.env.DEFAULT_EMAIL_TO || emailFrom;
   const smtpHost = map['SMTP_HOST'] || process.env.SMTP_HOST || 'smtp.gmail.com';
-  const smtpPort = Number(map['SMTP_PORT'] || process.env.SMTP_PORT) || 587;
-
-  const twilioSid = map['TWILIO_ACCOUNT_SID'] || process.env.TWILIO_ACCOUNT_SID || '';
-  const twilioToken = map['TWILIO_AUTH_TOKEN'] || process.env.TWILIO_AUTH_TOKEN || '';
-  const twilioFrom = map['TWILIO_WHATSAPP_FROM'] || process.env.TWILIO_WHATSAPP_FROM || 'whatsapp:+14155238886';
-  const callmebotKey = map['CALLMEBOT_API_KEY'] || process.env.CALLMEBOT_API_KEY || '';
-  const defaultWhatsappTo = map['DEFAULT_WHATSAPP_TO'] || process.env.DEFAULT_WHATSAPP_TO || '';
+  const smtpPort = Number(map['SMTP_PORT'] || process.env.SMTP_PORT) || 465;
 
   return {
-    resendApiKey: resendApiKey ? '••••••••' : '',
-    hasResendKey: Boolean(resendApiKey),
-    resendFrom,
     emailFrom,
     hasAppPassword: Boolean(emailAppPassword),
     defaultEmailTo,
     smtpHost,
     smtpPort,
-    twilioSid,
-    hasTwilioToken: Boolean(twilioToken),
-    twilioFrom,
-    callmebotKey,
-    hasCallmebotKey: Boolean(callmebotKey),
-    defaultWhatsappTo,
-    hasTwilio: Boolean(twilioSid && twilioToken),
-    isEmailConfigured: Boolean(resendApiKey || (emailFrom && emailAppPassword)),
-    isWhatsappConfigured: Boolean(callmebotKey || (twilioSid && twilioToken)),
+    isEmailConfigured: Boolean(emailFrom && emailAppPassword),
   };
 });
 
@@ -665,18 +646,11 @@ fastify.post('/api/settings/notifications', async (request, reply) => {
   const body = (request.body as any) || {};
 
   const keysToUpdate: Record<string, string | undefined> = {
-    RESEND_API_KEY: body.resendApiKey !== undefined ? String(body.resendApiKey).trim() : undefined,
-    RESEND_FROM: body.resendFrom !== undefined ? String(body.resendFrom).trim() : undefined,
     EMAIL_FROM: body.emailFrom !== undefined ? String(body.emailFrom).trim() : undefined,
     EMAIL_APP_PASSWORD: body.emailAppPassword !== undefined ? String(body.emailAppPassword).trim().replace(/\s+/g, '') : undefined,
     DEFAULT_EMAIL_TO: body.defaultEmailTo !== undefined ? String(body.defaultEmailTo).trim() : undefined,
     SMTP_HOST: body.smtpHost !== undefined ? String(body.smtpHost).trim() : undefined,
     SMTP_PORT: body.smtpPort !== undefined ? String(body.smtpPort).trim() : undefined,
-    TWILIO_ACCOUNT_SID: body.twilioSid !== undefined ? String(body.twilioSid).trim() : undefined,
-    TWILIO_AUTH_TOKEN: body.twilioToken !== undefined ? String(body.twilioToken).trim() : undefined,
-    TWILIO_WHATSAPP_FROM: body.twilioFrom !== undefined ? String(body.twilioFrom).trim() : undefined,
-    CALLMEBOT_API_KEY: body.callmebotKey !== undefined ? String(body.callmebotKey).trim() : undefined,
-    DEFAULT_WHATSAPP_TO: body.defaultWhatsappTo !== undefined ? String(body.defaultWhatsappTo).trim() : undefined,
   };
 
   for (const [key, val] of Object.entries(keysToUpdate)) {
@@ -690,76 +664,50 @@ fastify.post('/api/settings/notifications', async (request, reply) => {
     }
   }
 
-  return { ok: true, message: 'Notification settings updated successfully' };
+  return { ok: true, message: 'Gmail SMTP settings saved successfully' };
 });
 
-// ── Notification Test Endpoint ────────────────────────────────────────────────
+// ── Notification Test Endpoint (Gmail SMTP Direct Test) ───────────────────────
 const handleTestNotification = async (request: any, reply: any) => {
   const session = extractAuthSession(request);
-  let { channel, target } = (request.body as any) || {};
-  if (channel === 'EMAIL' && !target && session.email) {
+  let { target } = (request.body as any) || {};
+  if (!target && session.email) {
     target = session.email;
   }
-  if (!channel || !target) {
-    return reply.badRequest('Channel (EMAIL or WHATSAPP) and target address/number are required');
-  }
 
-  // Diagnostic pre-flight check
+  // Load configured settings
   const dbSettings = await prisma.systemSetting.findMany();
   const map: Record<string, string> = {};
   for (const s of dbSettings) map[s.key] = s.value;
 
-  const resendApiKey = map['RESEND_API_KEY'] || process.env.RESEND_API_KEY || '';
   const emailFrom = map['EMAIL_FROM'] || process.env.EMAIL_FROM || '';
   const emailPass = map['EMAIL_APP_PASSWORD'] || process.env.EMAIL_APP_PASSWORD || '';
-  const twilioSid = map['TWILIO_ACCOUNT_SID'] || process.env.TWILIO_ACCOUNT_SID || '';
-  const callmebotKey = map['CALLMEBOT_API_KEY'] || process.env.CALLMEBOT_API_KEY || '';
+  const finalTarget = target || map['DEFAULT_EMAIL_TO'] || process.env.DEFAULT_EMAIL_TO || emailFrom;
 
-  if (channel === 'EMAIL' && !resendApiKey && (!emailFrom || !emailPass)) {
+  if (!emailFrom || !emailPass) {
     return reply.badRequest(
-      'Email service is not configured! Please configure your Resend API Key or Gmail credentials in Notification Settings (⚙️) first.'
+      'Gmail credentials not configured! Please provide EMAIL_FROM and EMAIL_APP_PASSWORD in Notification Settings (⚙️).'
     );
   }
 
-  if (channel === 'WHATSAPP' && !twilioSid && !callmebotKey) {
-    return reply.badRequest(
-      'Twilio credentials are not configured! Please provide your Twilio Account SID and Auth Token in Notification Settings (⚙️).'
-    );
+  if (!finalTarget) {
+    return reply.badRequest('Recipient email address is required for test email.');
   }
 
   try {
-    const samplePayload = {
-      monitorName: 'BookMyShow Live Monitor Alert',
-      city: 'Hyderabad',
-      url: 'https://in.bookmyshow.com/',
-      openings: [
-        {
-          date: 'Sample Show Date',
-          dateCode: '20260920',
-          theatre: 'PVR: Forum Sujana Mall (Test)',
-          showtime: '07:15 PM',
-          change: '🟢 Tickets opened up! (Test Dispatch)',
-          newStatus: 'available',
-        },
-      ],
-    };
-
-    let result: { success: boolean; error?: string };
-    if (channel === 'EMAIL') {
-      result = await sendEmailAlert(target, samplePayload.monitorName, samplePayload.city, samplePayload.url, samplePayload.openings);
-    } else {
-      result = await sendWhatsAppAlert(target, samplePayload.monitorName, samplePayload.city, samplePayload.url, samplePayload.openings);
-    }
+    const result = await sendTestEmail(finalTarget);
 
     if (!result.success) {
-      return reply.badRequest(`Delivery failed: ${result.error || 'Check notification credentials and network connectivity'}`);
+      return reply.badRequest(
+        `Failed to send email: ${result.error || 'Authentication or connection error'}`
+      );
     }
 
-    return { ok: true, message: `✅ Sample alert successfully delivered to ${target}!` };
+    return { ok: true, message: `✅ Test email successfully delivered to ${finalTarget}!` };
   } catch (err: any) {
-    fastify.log.error(err, 'Test alert dispatch failed');
+    fastify.log.error(err, 'Test email dispatch failed');
     return reply.badRequest(
-      `Delivery failed: ${err.message || 'Check notification credentials and network connectivity'}`
+      `Failed to send email: ${err.message || 'Check Gmail App Password and network connectivity'}`
     );
   }
 };
