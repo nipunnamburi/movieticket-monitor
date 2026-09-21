@@ -41,7 +41,10 @@ export async function getNotificationConfig(): Promise<NotificationConfig> {
   }
 
   const resendApiKey = settingsMap['RESEND_API_KEY'] || process.env.RESEND_API_KEY || '';
-  const resendFrom = settingsMap['RESEND_FROM'] || process.env.RESEND_FROM || 'BookMyShow Alerts <onboarding@resend.dev>';
+  let resendFrom = settingsMap['RESEND_FROM'] || process.env.RESEND_FROM || 'BookMyShow Alerts <onboarding@resend.dev>';
+  if (resendFrom.includes('@gmail.') || resendFrom.includes('@yahoo.') || resendFrom.includes('@outlook.') || resendFrom.includes('@hotmail.')) {
+    resendFrom = 'BookMyShow Alerts <onboarding@resend.dev>';
+  }
 
   const emailFrom = settingsMap['EMAIL_FROM'] || process.env.EMAIL_FROM || '';
   const emailAppPassword = (settingsMap['EMAIL_APP_PASSWORD'] || process.env.EMAIL_APP_PASSWORD || '').replace(/\s+/g, '');
