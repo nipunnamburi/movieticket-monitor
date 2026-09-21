@@ -56,3 +56,46 @@ export function verifyToken(token: string): TokenPayload | null {
     return null;
   }
 }
+
+// ── Private Vault / Client ID / User Auth Helper ─────────────────────────────
+export interface AuthContext {
+  userId?: string;
+  email?: string;
+  clientId: string;
+}
+
+export function extractAuthSession(request: any): AuthContext {
+  const authHeader = request.headers?.authorization;
+  if (authHeader && typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.slice(7).trim();
+    const payload = verifyToken(token);
+    if (payload?.userId) {
+      return { userId: payload.userId, email: payload.email, clientId: payload.userId };
+    }
+  }
+
+  const header = request.headers?.['x-vault-key'] || request.headers?.['x-client-token'] || request.headers?.['x-auth-token'];
+  const query = request.query?.vaultKey || request.query?.token;
+  const token = (Array.isArray(header) ? header[0] : header) || query || '';
+  const clientId = typeof token === 'string' && token.trim() ? token.trim() : '';
+
+  if (clientId.startsWith('Bearer ')) {
+    const rawToken = clientId.slice(7).trim();
+    const payload = verifyToken(rawToken);
+    if (payload?.userId) {
+      return { userId: payload.userId, email: payload.email, clientId: payload.userId };
+    }
+  } else if (clientId && clientId.includes('.')) {
+    const payload = verifyToken(clientId);
+    if (payload?.userId) {
+      return { userId: payload.userId, email: payload.email, clientId: payload.userId };
+    }
+  }
+
+  return { clientId };
+}
+
+export function extractClientId(request: any): string {
+  const session = extractAuthSession(request);
+  return session.userId || session.clientId;
+}
