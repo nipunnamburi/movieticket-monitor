@@ -1,9 +1,9 @@
 name: BMS 24/7 Cloud Monitor
 
 on:
-  schedule:
-    # Check every 5 minutes 24/7 in GitHub's cloud (Zero local computer usage)
-    - cron: "*/5 * * * *"
+#  schedule:
+#    # Check every 5 minutes 24/7 in GitHub's cloud (Zero local computer usage)
+#    - cron: "*/5 * * * *"
   workflow_dispatch:
     # Allows manual "Check Now" trigger from the Vercel web UI
     inputs:
